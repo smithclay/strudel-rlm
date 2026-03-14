@@ -165,6 +165,11 @@
 
   <main id="main-panel">
     <pre id="code-display">Waiting for first iteration...</pre>
+    <div id="critic-panel" style="display:none; margin-top:0.75rem; padding:0.75rem; background:#0a0a16; border:1px solid #222; border-radius:8px;">
+      <h3 style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.1em; color:#555; margin-bottom:0.5rem;">Critic Evaluation</h3>
+      <div id="critic-scores" style="display:grid; grid-template-columns:1fr 1fr; gap:0.4rem; font-size:0.8rem;"></div>
+      <div id="critic-status" style="margin-top:0.5rem; font-size:0.8rem;"></div>
+    </div>
     <div id="viz-area"></div>
   </main>
 
@@ -174,5 +179,37 @@
     <button id="btn-done" disabled>&#10005; Done</button>
   </footer>
 
+<script>
+window.__strudelPushCriticScores = function(data) {
+  var panel = document.getElementById('critic-panel');
+  var scoresEl = document.getElementById('critic-scores');
+  var statusEl = document.getElementById('critic-status');
+  if (!panel || !scoresEl) return;
+  panel.style.display = 'block';
+  var dims = [
+    { key: 'harmony', label: 'Harmony', color: '#818cf8' },
+    { key: 'rhythm', label: 'Rhythm', color: '#f0c040' },
+    { key: 'arrangement', label: 'Arrangement', color: '#4ade80' },
+    { key: 'production', label: 'Production', color: '#f472b6' },
+  ];
+  scoresEl.innerHTML = dims.map(function(d) {
+    var score = data[d.key] || 0;
+    var pct = score * 10;
+    return '<div style="display:flex;align-items:center;gap:0.5rem;">' +
+      '<span style="width:90px;color:#888;">' + d.label + '</span>' +
+      '<div style="flex:1;height:6px;background:#1a1a3a;border-radius:3px;overflow:hidden;">' +
+      '<div style="width:' + pct + '%;height:100%;background:' + d.color + ';border-radius:3px;"></div>' +
+      '</div>' +
+      '<span style="color:' + d.color + ';font-weight:600;width:30px;text-align:right;">' + score + '</span>' +
+      '</div>';
+  }).join('');
+  var avg = data.average ? data.average.toFixed(1) : '?';
+  var approved = data.approved;
+  var roundNum = data.round || '?';
+  statusEl.innerHTML = '<span style="color:#888;">Round ' + roundNum + '</span> · ' +
+    '<span style="color:' + (approved ? '#4ade80' : '#f0c040') + ';">Avg: ' + avg + '/10 ' +
+    (approved ? '✓ Approved' : '→ Revising...') + '</span>';
+};
+</script>
 </body>
 </html>
