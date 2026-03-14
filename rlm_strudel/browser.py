@@ -62,6 +62,17 @@ class StrudelBrowser:
                 {"number": number, "code": code, "valid": valid, "error": error},
             )
 
+    def push_critic_scores(self, round_num: int, scores: dict):
+        """Push critic evaluation scores to the browser UI."""
+        if self._page:
+            try:
+                self._page.evaluate(
+                    "(data) => window.__strudelPushCriticScores && window.__strudelPushCriticScores(data)",
+                    {"round": round_num, **scores},
+                )
+            except Exception as e:
+                print(f"[browser] push_critic_scores failed (non-fatal): {e}")
+
     def signal_rlm_complete(self, final_code: str):
         """Tell the browser the RLM is done and pass the final code."""
         self._page.evaluate(
