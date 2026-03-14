@@ -90,19 +90,14 @@ def main():
         print(f"\nExplanation:\n{result.explanation}")
         print("\n" + "=" * 60)
 
-        # Play the final code in the browser
+        # Signal browser that RLM is complete — user clicks Play/Done
         code = result.strudel_code
         if code:
             if ".play()" not in code:
                 code = code.rstrip().rstrip(";") + ".play()"
-            print("\nPlaying final code in browser...")
-            analysis = interpreter.play_in_browser(code)
-            print(f"Audio analysis: {analysis}")
-
-        try:
-            input("\nPress Enter to stop and exit...")
-        except EOFError:
-            pass
+            interpreter.signal_rlm_complete(code)
+            print("\nRLM complete. Browser ready — click Play to listen, Done to exit.")
+            interpreter.wait_for_done()
 
     finally:
         if interpreter:

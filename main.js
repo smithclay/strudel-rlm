@@ -1,10 +1,16 @@
 import { initStrudel, evaluate, hush, getAudioContext } from '@strudel/web';
 
-const status = document.getElementById('status');
 const codeDisplay = document.getElementById('code-display');
-const iterCount = document.getElementById('iter-count');
+const timeline = document.getElementById('timeline');
+const phase = document.getElementById('phase');
+const btnPlay = document.getElementById('btn-play');
+const btnStop = document.getElementById('btn-stop');
+const btnDone = document.getElementById('btn-done');
 
-let iteration = 0;
+// State
+const iterations = [];
+let selectedIndex = null;
+window.__userDone = false;
 
 initStrudel({
   prebake: () => samples('github:tidalcycles/dirt-samples'),
@@ -30,45 +36,90 @@ initStrudel({
     window.__analyser = analyser;
   }
 
-  status.textContent = 'Ready! Click play.';
   window.__strudelReady = true;
 });
 
-// Playwright-callable: validate-only (transpile, no audio scheduling)
+// --- Iteration timeline API (called from Python via Playwright) ---
+
+window.__strudelPushIteration = (data) => {
+  const { number, code, valid, error } = data;
+  iterations.push(data);
+
+  // Create card in timeline
+  const card = document.createElement('div');
+  card.className = `iter-card ${valid ? 'valid' : 'error'}`;
+  card.innerHTML = `
+    <div class="iter-header">
+      <span class="iter-num">#${number}</span>
+      <span class="iter-badge">${valid ? 'valid' : 'error'}</span>
+    </div>
+    <div class="iter-preview">${(code || error || '').substring(0, 60)}</div>
+  `;
+
+  const idx = iterations.length - 1;
+  card.addEventListener('click', () => selectIteration(idx));
+  timeline.appendChild(card);
+
+  // Auto-select latest and scroll
+  selectIteration(idx);
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+};
+
+function selectIteration(idx) {
+  selectedIndex = idx;
+  const data = iterations[idx];
+
+  // Update code display
+  if (data.valid) {
+    codeDisplay.textContent = data.code;
+  } else {
+    codeDisplay.textContent = `// Error: ${data.error}\n\n${data.code}`;
+  }
+
+  // Update card selection styles
+  const cards = timeline.querySelectorAll('.iter-card');
+  cards.forEach((c, i) => c.classList.toggle('selected', i === idx));
+}
+
+// --- RLM lifecycle (called from Python via Playwright) ---
+
+window.__strudelRLMComplete = (finalCode) => {
+  window.__finalCode = finalCode;
+  btnPlay.disabled = false;
+  btnDone.disabled = false;
+  phase.textContent = 'Ready to play';
+  phase.className = 'ready';
+};
+
+// --- Strudel eval/validate APIs (unchanged) ---
+
 window.__strudelValidate = async (code) => {
   try {
-    await evaluate(code, false); // transpile only, no audio
+    // Strip .play() so validation never starts audio
+    const safeCode = code.replace(/\.play\(\)\s*;?\s*$/, '');
+    await evaluate(safeCode, false);
     return { success: true, error: null };
   } catch (e) {
     return { success: false, error: e.message };
   }
 };
 
-// Playwright-callable: evaluate Strudel code via the transpiler (with audio)
-// Caller is responsible for sending the FULL accumulated code each time.
 window.__strudelEval = async (code) => {
   try {
     hush();
     await new Promise((r) => setTimeout(r, 50));
     await evaluate(code);
-    iteration++;
-    if (codeDisplay) codeDisplay.textContent = code;
-    if (iterCount) iterCount.textContent = `Iteration: ${iteration}`;
-    status.textContent = 'Playing...';
     return { success: true, error: null };
   } catch (e) {
     return { success: false, error: e.message };
   }
 };
 
-// Playwright-callable: stop audio
 window.__strudelStop = () => {
   hush();
-  status.textContent = 'Stopped.';
   return { success: true };
 };
 
-// Playwright-callable: audio analysis
 window.__getAudioAnalysis = async () => {
   try {
     const ctx = getAudioContext();
@@ -77,7 +128,6 @@ window.__getAudioAnalysis = async () => {
       return { playing: false, rms: 0, state: ctx?.state || 'unavailable' };
     }
 
-    // Wait a beat for audio data to flow through
     await new Promise((r) => setTimeout(r, 200));
 
     const data = new Float32Array(analyser.fftSize);
@@ -89,12 +139,32 @@ window.__getAudioAnalysis = async () => {
   }
 };
 
-document.getElementById('play').addEventListener('click', () => {
-  note('<c a f e>(3,8)').s('triangle').jux(rev).play();
-  status.textContent = 'Playing...';
+// --- Button handlers ---
+
+btnPlay.addEventListener('click', async () => {
+  const ctx = getAudioContext();
+  if (ctx && ctx.state === 'suspended') {
+    await ctx.resume();
+  }
+  if (window.__finalCode) {
+    await window.__strudelEval(window.__finalCode);
+    phase.textContent = 'Playing';
+    phase.className = 'ready';
+  }
 });
 
-document.getElementById('stop').addEventListener('click', () => {
+btnStop.addEventListener('click', () => {
   hush();
-  status.textContent = 'Stopped.';
+  phase.textContent = window.__finalCode ? 'Ready to play' : 'Composing...';
+  phase.className = window.__finalCode ? 'ready' : 'composing';
+});
+
+btnDone.addEventListener('click', () => {
+  window.__userDone = true;
+  hush();
+  btnPlay.disabled = true;
+  btnStop.disabled = true;
+  btnDone.disabled = true;
+  phase.textContent = 'Shutting down...';
+  phase.className = 'shutting-down';
 });

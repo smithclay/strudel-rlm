@@ -69,6 +69,7 @@ class StrudelInterpreter:
         self._page = None
         self._started = False
         self._audio_unlocked = False
+        self._iteration_count = 0
 
     def start(self):
         if self._started:
@@ -82,15 +83,26 @@ class StrudelInterpreter:
         self._page.wait_for_function("window.__strudelReady === true", timeout=30000)
         self._started = True
 
-    def _unlock_audio(self):
-        """Click play/stop to unlock AudioContext. Only needed before actual playback."""
-        if self._audio_unlocked:
-            return
-        self._page.click("#play")
-        time.sleep(0.5)
-        self._page.click("#stop")
-        time.sleep(0.2)
-        self._audio_unlocked = True
+    def push_iteration(self, number: int, code: str, valid: bool, error: str | None = None):
+        """Push an iteration to the browser timeline."""
+        self._page.evaluate(
+            "(data) => window.__strudelPushIteration(data)",
+            {"number": number, "code": code, "valid": valid, "error": error},
+        )
+
+    def signal_rlm_complete(self, final_code: str):
+        """Tell the browser the RLM is done and pass the final code."""
+        self._page.evaluate(
+            "(code) => window.__strudelRLMComplete(code)",
+            final_code,
+        )
+
+    def wait_for_done(self):
+        """Block until the user clicks Done or closes the browser."""
+        try:
+            self._page.wait_for_function("window.__userDone === true", timeout=0)
+        except Exception:
+            pass  # Browser was closed directly — treat as done
 
     def _eval_print_expr(self, expr: ast.AST, variables: dict[str, Any]) -> Any:
         compiled = compile(ast.Expression(body=expr), "<strudel-print>", "eval")
@@ -166,6 +178,12 @@ class StrudelInterpreter:
             if pre_submit:
                 strudel_code, output_parts = self._split_strudel_code(pre_submit, variables)
                 result = self._validate_in_browser(strudel_code) if strudel_code else "Valid!"
+                self._iteration_count += 1
+                valid = not result.startswith("[Error]")
+                self.push_iteration(
+                    self._iteration_count, strudel_code or pre_submit, valid,
+                    result if not valid else None,
+                )
                 if result.startswith("[Error]"):
                     print(f"[interpreter] SUBMIT blocked — code invalid: {result}")
                     messages = [*output_parts, result]
@@ -188,6 +206,12 @@ class StrudelInterpreter:
         strudel_code, output_parts = self._split_strudel_code(code, variables)
         if strudel_code:
             result = self._validate_in_browser(strudel_code)
+            self._iteration_count += 1
+            valid = not result.startswith("[Error]")
+            self.push_iteration(
+                self._iteration_count, strudel_code, valid,
+                result if not valid else None,
+            )
             output_parts.append(result)
 
         output = "\n".join(output_parts) if output_parts else None
@@ -214,7 +238,6 @@ class StrudelInterpreter:
         """Play code with audio via __strudelEval. Returns audio analysis. Called post-RLM."""
         if not self._started:
             self.start()
-        self._unlock_audio()
 
         print(f"[interpreter] Playing:\n{code}")
         result = self._page.evaluate(
