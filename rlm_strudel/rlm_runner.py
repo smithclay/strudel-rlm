@@ -6,6 +6,8 @@ from dspy.predict.rlm import RLM, REPLHistory
 from rlm_strudel.browser import StrudelBrowser, BrowserCallback
 from rlm_strudel.interpreter import SingleInjectInterpreter
 from rlm_strudel.prompts import STRUDEL_CONTEXT
+from rlm_strudel.critic import StrudelCritic
+from rlm_strudel.references import select_references, format_references_for_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -26,21 +28,27 @@ Built-in functions:
 You are producing: {output_fields}
 
 Workflow:
-1. EXPLORE: Use print() to slice and inspect relevant sections of `context` for your task. Look for section headers with `context.find("## Section Name")`. Find genre examples, rhythm templates, effects recipes, and available sounds.
-2. COMPOSE: Use llm_query() to generate each musical part (drums, bass, melody, etc.), passing focused context slices so the sub-agent has the API reference it needs. Store results in variables.
-3. VALIDATE: Use validate_code() on each part and the combined result. If validation fails, fix or regenerate.
-4. SUBMIT: When the full composition validates, call SUBMIT(strudel_code, explanation).
+1. EXPLORE: Use print() to slice and inspect relevant sections of `context` for your task. Look for section headers with `context.find("## Section Name")`. Find genre examples, rhythm templates, effects recipes, available sounds, and REFERENCE COMPOSITIONS.
+2. COMPOSE SECTIONS: Build the composition in sections — use llm_query() to generate each section (intro, verse, chorus, bridge, outro) as separate `const` variables using `stack()`. Pass focused context slices and reference examples so the sub-agent has the API reference it needs.
+3. VALIDATE: Use validate_code() on each section individually and on the combined result. If validation fails, fix or regenerate.
+4. STRUCTURE: Wire sections together using `arrange([cycles, pattern], ...)`. Set appropriate cycle durations per section. Ensure sections contrast in energy, density, and texture.
+5. SUBMIT: When the full arranged composition validates, call SUBMIT(strudel_code, explanation).
 
 Variables persist between iterations. Build up your composition incrementally.
 Write pure Python — Strudel code only appears as string values.
 
 IMPORTANT RULES:
 - Always end Strudel code strings with .play()
-- Use stack() in Strudel to layer multiple patterns
-- ONLY use these samples: bd, sd, hh, lt, cp, noise, jvbass
-- ONLY use these synths (as strings in .s()): "sawtooth", "square", "triangle", "sine"
+- Use stack() to layer multiple patterns within each section
+- Use arrange() to sequence sections into a full song (intro, verse, chorus, etc.)
+- Use `const` to name each section before arrange()
+- Drums: bd, sd, hh, oh, lt, mt, ht, cp, rim, cr, rd, cb, noise
+- Bass: jvbass, bass1, bass3
+- Synths (as strings in .s()): "sawtooth", "square", "triangle", "sine"
+- Technique: .detune(N) for fat pads, note("c3,e3,g3") for chords, .arp("up") for arpeggios
 - NEVER use .bank() — it will silently fail
-- Use .cpm(N) for tempo, NOT setbpm"""
+- Use .cpm(N) for tempo, NOT setbpm
+- Sections should CONTRAST: intro=sparse, verse=medium, chorus=full energy, outro=wind down"""
 
 
 class StrudelRLM(RLM):
@@ -100,6 +108,7 @@ def run_strudel_rlm(
     model: str = "openai/gpt-4o",
     max_iters: int = 10,
     max_llm_calls: int = 20,
+    max_debate_rounds: int = 3,
     url: str = "http://127.0.0.1:5173",
 ):
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
@@ -113,19 +122,86 @@ def run_strudel_rlm(
     callback = BrowserCallback(browser)
     dspy.configure(lm=lm, callbacks=[callback])
 
-    rlm = StrudelRLM(
-        "context, query -> strudel_code, explanation",
-        tools=[browser.validate_code],
-        max_iterations=max_iters,
-        max_llm_calls=max_llm_calls,
-        verbose=True,
-        interpreter=SingleInjectInterpreter(),
-    )
+    # Select relevant reference compositions for the query
+    refs = select_references(query)
+    refs_text = format_references_for_prompt(refs)
+    context_with_refs = STRUDEL_CONTEXT + "\n\n" + refs_text
+    print(f"[strudel] Selected {len(refs)} reference compositions")
 
-    try:
-        print("[strudel] Starting RLM loop...")
-        result = rlm(context=STRUDEL_CONTEXT, query=query)
-        return result, browser
-    except Exception:
-        browser.shutdown()
-        raise
+    critic = StrudelCritic()
+    best_result = None
+    best_score = 0.0
+
+    for debate_round in range(1, max_debate_rounds + 1):
+        print(f"\n[strudel] === Debate Round {debate_round}/{max_debate_rounds} ===")
+
+        # Build the composer query — include critic feedback after round 1
+        composer_query = query
+        if best_result and hasattr(best_result, '_critic_feedback'):
+            composer_query = (
+                f"{query}\n\n"
+                f"## Critic Feedback from Previous Round\n"
+                f"The critic scored your previous attempt and wants these revisions:\n"
+                f"{best_result._critic_feedback}\n\n"
+                f"## Previous Code (to revise, not start from scratch)\n"
+                f"```\n{best_result.strudel_code}\n```\n\n"
+                f"Fix the issues the critic identified while keeping what scored well."
+            )
+
+        rlm = StrudelRLM(
+            "context, query -> strudel_code, explanation",
+            tools=[browser.validate_code],
+            max_iterations=max_iters,
+            max_llm_calls=max_llm_calls,
+            verbose=True,
+            interpreter=SingleInjectInterpreter(),
+        )
+
+        try:
+            print("[strudel] Starting composer RLM loop...")
+            result = rlm(context=context_with_refs, query=composer_query)
+        except Exception:
+            browser.shutdown()
+            raise
+
+        code = result.strudel_code
+        if not code:
+            print("[strudel] No code generated, skipping critic")
+            continue
+
+        # Critic evaluation
+        print("[strudel] Critic evaluating...")
+        try:
+            critique = critic.evaluate(query, code)
+        except Exception as e:
+            print(f"[strudel] Critic failed: {e}, submitting as-is")
+            return result, browser
+
+        print(f"[strudel] Critic scores: {critique}")
+        print(f"[strudel] {critique.format_feedback()}")
+
+        # Push critic scores to browser
+        browser.push_critic_scores(debate_round, {
+            "harmony": critique.harmony,
+            "rhythm": critique.rhythm,
+            "arrangement": critique.arrangement,
+            "production": critique.production,
+            "average": critique.average,
+            "approved": critique.approved,
+        })
+
+        # Track best result
+        if critique.average > best_score:
+            best_score = critique.average
+            best_result = result
+            best_result._critic_feedback = critique.format_feedback()
+
+        if critique.approved:
+            print(f"[strudel] Critic approved! (avg: {critique.average:.1f})")
+            return result, browser
+
+        print(f"[strudel] Critic wants revisions (avg: {critique.average:.1f}, min: {critique.min_score})")
+
+    # Max rounds reached — return best attempt
+    print(f"[strudel] Max debate rounds reached. Returning best attempt (avg: {best_score:.1f})")
+    return best_result, browser
