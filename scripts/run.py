@@ -61,6 +61,7 @@ def main():
     parser.add_argument("query", help="Natural language description of the desired music pattern")
     parser.add_argument("--model", default="openrouter/google/gemini-3-flash-preview", help="LLM model")
     parser.add_argument("--max-iters", type=int, default=10, help="Max RLM iterations (default: 10)")
+    parser.add_argument("--max-llm-calls", type=int, default=20, help="Max sub-LLM calls via llm_query (default: 20)")
     parser.add_argument("--no-vite", action="store_true", help="Skip starting Vite (if already running)")
     parser.add_argument("--url", default="http://127.0.0.1:5173", help="Strudel app URL")
     args = parser.parse_args()
@@ -70,16 +71,17 @@ def main():
         print(f"Starting Vite dev server at {args.url}...")
         vite_proc = start_vite(args.url)
 
-    interpreter = None
+    browser = None
     try:
         print(f"\nGenerating pattern for: {args.query}")
         print(f"Using model: {args.model}")
         print(f"Max iterations: {args.max_iters}\n")
 
-        result, interpreter = run_strudel_rlm(
+        result, browser = run_strudel_rlm(
             args.query,
             args.model,
             args.max_iters,
+            max_llm_calls=args.max_llm_calls,
             url=args.url,
         )
 
@@ -90,18 +92,29 @@ def main():
         print(f"\nExplanation:\n{result.explanation}")
         print("\n" + "=" * 60)
 
-        # Signal browser that RLM is complete — user clicks Play/Done
+        # Play the result in the browser
         code = result.strudel_code
         if code:
             if ".play()" not in code:
                 code = code.rstrip().rstrip(";") + ".play()"
-            interpreter.signal_rlm_complete(code)
-            print("\nRLM complete. Browser ready — click Play to listen, Done to exit.")
-            interpreter.wait_for_done()
+            try:
+                browser.signal_rlm_complete(code)
+            except Exception as e:
+                print(f"[warn] signal_rlm_complete failed: {e}")
+            try:
+                browser.play_in_browser(code)
+            except Exception as e:
+                print(f"[warn] play_in_browser failed: {e}")
+            try:
+                input("\nPress Enter to exit...")
+            except EOFError:
+                browser.wait_for_done()
+        else:
+            print("\n[warn] No strudel code was generated.")
 
     finally:
-        if interpreter:
-            interpreter.shutdown()
+        if browser:
+            browser.shutdown()
         if vite_proc:
             stop_process(vite_proc)
 

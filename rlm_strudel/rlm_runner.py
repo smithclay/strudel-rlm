@@ -1,53 +1,47 @@
 """DSPy RLM configuration and orchestration for Strudel pattern generation."""
 
+import logging
 import dspy
 from dspy.predict.rlm import RLM, REPLHistory
-from rlm_strudel.interpreter import StrudelInterpreter
+from rlm_strudel.browser import StrudelBrowser, BrowserCallback
 from rlm_strudel.prompts import STRUDEL_CONTEXT
 
-STRUDEL_INSTRUCTIONS = """You are tasked with producing the following outputs given the inputs {inputs}:
-{output_fields}
+ORCHESTRATOR_INSTRUCTIONS = """You are a music composition orchestrator. You write Python code to compose Strudel music patterns.
 
-You have access to a Strudel live-coding REPL running in a browser. Each iteration validates your code (transpile check). Audio only plays after you SUBMIT.
+You have access to the following variables and functions:
 
-DECOMPOSE your work incrementally (3-5 iterations typical):
-- Iteration 1: Drums → `s("bd sd [~ bd] sd").play()`
-- Iteration 2: Drums+bass → `stack(s("bd sd [~ bd] sd"), note("<c2 f2>").s("sawtooth")).play()`
-- Iteration 3: Full composition → `stack(drums, bass, melody).play()` then SUBMIT
+Variables:
+- `context`: Strudel API reference + pattern library ({context_len} chars). DO NOT read it all — use Python string slicing and `.find()` to extract relevant sections.
+- `query`: The user's musical request.
 
-Available:
-- Variables: {inputs} (your input data — the `context` variable contains the Strudel API reference)
-- `SUBMIT({final_output_names})` — call this to finish! First arg = the Strudel code string, second arg = explanation string.
+Built-in functions:
+- `llm_query(prompt)` → str: Delegate a task to a sub-agent. Use this to generate Strudel code snippets. Pass relevant slices of `context` so the sub-agent knows the API and available sounds.
+- `validate_code(code)` → str: Validate a Strudel code string in the browser. Returns "Valid!" or "[Error] ...".
+- `print(...)`: Inspect variables and results. This is how you see output between iterations.
+- `SUBMIT(strudel_code, explanation)`: Submit final composition. First arg = complete Strudel code string, second arg = explanation string.
 
-WORKFLOW:
-1. BUILD — start with drums or a simple pattern, check output says "Valid!"
-2. LAYER — add bass, melody, effects. Each iteration includes ALL patterns via stack()
-3. SUBMIT — once your code is valid and complete, call SUBMIT
+You are producing: {output_fields}
 
-IMPORTANT — EACH ITERATION REPLACES PREVIOUS CODE:
-- Always end with .play() in your expression
-- Use stack() to layer multiple patterns simultaneously
-- Each iteration must include ALL patterns you want
+Workflow:
+1. EXPLORE: Use print() to slice and inspect relevant sections of `context` for your task. Look for section headers with `context.find("## Section Name")`. Find genre examples, rhythm templates, effects recipes, and available sounds.
+2. COMPOSE: Use llm_query() to generate each musical part (drums, bass, melody, etc.), passing focused context slices so the sub-agent has the API reference it needs. Store results in variables.
+3. VALIDATE: Use validate_code() on each part and the combined result. If validation fails, fix or regenerate.
+4. SUBMIT: When the full composition validates, call SUBMIT(strudel_code, explanation).
 
-RULES:
-- Do NOT use setbpm — use .cpm(N) to set tempo
-- Comments with // are fine
-- Always call .play() at the end of your expression
-- NEVER use .bank() — sample banks are not loaded and will silently fail
-- ONLY use these sample names: bd, sd, hh, lt, cp, noise, jvbass
-- ONLY use these synths (as strings): "sawtooth", "square", "triangle", "sine"
-- Never use sawtooth/square/triangle/sine as bare JS variables — always quote them as strings in .s()
-- SUBMIT as soon as your code is valid and complete. Do NOT keep tweaking endlessly.
+Variables persist between iterations. Build up your composition incrementally.
+Write pure Python — Strudel code only appears as string values.
 
-SUBMIT FORMAT:
-```
-SUBMIT('stack(s("bd sd"), note("c2").s("sawtooth")).play()', 'A simple beat with bass')
-```
-Both args are string literals. First arg is the complete Strudel code. Second is the explanation."""
+IMPORTANT RULES:
+- Always end Strudel code strings with .play()
+- Use stack() in Strudel to layer multiple patterns
+- ONLY use these samples: bd, sd, hh, lt, cp, noise, jvbass
+- ONLY use these synths (as strings in .s()): "sawtooth", "square", "triangle", "sine"
+- NEVER use .bank() — it will silently fail
+- Use .cpm(N) for tempo, NOT setbpm"""
 
 
 class StrudelRLM(RLM):
-    """RLM subclass that prompts for Strudel JS instead of Python."""
+    """RLM that uses an orchestrator prompt for Python-based composition."""
 
     def _build_signatures(self):
         inputs_str = ", ".join(f"`{n}`" for n in self.signature.input_fields)
@@ -63,15 +57,15 @@ class StrudelRLM(RLM):
         tool_docs = self._format_tool_docs(self._user_tools)
 
         action_sig = (
-            dspy.Signature({}, task_instructions + STRUDEL_INSTRUCTIONS.format(
-                inputs=inputs_str, final_output_names=final_output_names,
+            dspy.Signature({}, task_instructions + ORCHESTRATOR_INSTRUCTIONS.format(
+                context_len=len(STRUDEL_CONTEXT),
                 output_fields=output_fields,
             ) + tool_docs)
             .append("variables_info", dspy.InputField(desc="Metadata about the variables available in the REPL"), type_=str)
             .append("repl_history", dspy.InputField(desc="Previous REPL code executions and their outputs"), type_=REPLHistory)
             .append("iteration", dspy.InputField(desc="Current iteration number (1-indexed) out of max_iterations"), type_=str)
-            .append("reasoning", dspy.OutputField(desc="Brief: what exists, what to add/fix next. If audio is playing well, SUBMIT now."), type_=str)
-            .append("code", dspy.OutputField(desc="Strudel JS code. End with .play(). When satisfied, include SUBMIT('code', 'explanation') after the code. Use ```js code block."), type_=str)
+            .append("reasoning", dspy.OutputField(desc="Brief: what to explore, generate, or fix next. If composition is valid and complete, SUBMIT."), type_=str)
+            .append("code", dspy.OutputField(desc="Python code. Use print(), llm_query(), validate_code(), SUBMIT(). Use ```python code block."), type_=str)
         )
 
         extract_instructions = """Based on the REPL trajectory, extract the final outputs now.
@@ -95,23 +89,32 @@ def run_strudel_rlm(
     query: str,
     model: str = "openai/gpt-4o",
     max_iters: int = 10,
+    max_llm_calls: int = 20,
     url: str = "http://127.0.0.1:5173",
 ):
-    lm = dspy.LM(model, cache=False)
-    dspy.configure(lm=lm)
+    logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
-    interpreter = StrudelInterpreter(url=url)
+    lm = dspy.LM(model, cache=False)
+
+    browser = StrudelBrowser(url=url)
+    browser.start()
+    print("[strudel] Browser ready")
+
+    callback = BrowserCallback(browser)
+    dspy.configure(lm=lm, callbacks=[callback])
 
     rlm = StrudelRLM(
         "context, query -> strudel_code, explanation",
-        interpreter=interpreter,
+        tools=[browser.validate_code],
         max_iterations=max_iters,
+        max_llm_calls=max_llm_calls,
         verbose=True,
     )
 
     try:
+        print("[strudel] Starting RLM loop...")
         result = rlm(context=STRUDEL_CONTEXT, query=query)
-        return result, interpreter
+        return result, browser
     except Exception:
-        interpreter.shutdown()
+        browser.shutdown()
         raise

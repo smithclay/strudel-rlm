@@ -142,14 +142,28 @@ window.__getAudioAnalysis = async () => {
 // --- Button handlers ---
 
 btnPlay.addEventListener('click', async () => {
-  const ctx = getAudioContext();
-  if (ctx && ctx.state === 'suspended') {
-    await ctx.resume();
-  }
-  if (window.__finalCode) {
-    await window.__strudelEval(window.__finalCode);
-    phase.textContent = 'Playing';
-    phase.className = 'ready';
+  console.log('[play] clicked, finalCode?', !!window.__finalCode);
+  try {
+    const ctx = getAudioContext();
+    console.log('[play] AudioContext state:', ctx?.state);
+    if (ctx && ctx.state === 'suspended') {
+      await ctx.resume();
+      console.log('[play] AudioContext resumed');
+    }
+    if (window.__finalCode) {
+      const result = await window.__strudelEval(window.__finalCode);
+      console.log('[play] eval result:', result);
+      if (result.success) {
+        phase.textContent = 'Playing';
+        phase.className = 'ready';
+      } else {
+        phase.textContent = `Error: ${result.error}`;
+      }
+    } else {
+      console.log('[play] no finalCode set');
+    }
+  } catch (e) {
+    console.error('[play] error:', e);
   }
 });
 
