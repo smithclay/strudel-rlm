@@ -1,0 +1,3 @@
+dspy>=2.6
+playwright>=1.49
+python-dotenv
