@@ -71,14 +71,76 @@ by chaining functions and must end with `.play()` to produce sound.
 - `cat(pat1, pat2)` — sequence patterns one after another
 - `seq(pat1, pat2)` — alias for cat
 
+## Song Structure with arrange()
+
+`arrange([cycles, pattern], ...)` sequences patterns over time. Each entry is
+`[N, pattern]` where N is the number of cycles that pattern plays before moving
+to the next entry.
+
+```
+const intro = stack(
+  s("bd ~ ~ ~"),
+  s("hh*4").gain(0.2),
+  note("c3").s("sine").lpf(400).gain(0.4)
+)
+
+const verse = stack(
+  s("bd ~ [~ bd] ~"),
+  s("~ sd ~ sd"),
+  s("hh*8").gain(0.3),
+  note("<c2 f2 g2 c2>").s("sawtooth").lpf(400).gain(0.7),
+  note("<[c3,e3,g3] [f3,a3,c4]>").s("triangle").lpf(1200).gain(0.4)
+)
+
+const chorus = stack(
+  s("bd [~ bd] sd [bd ~]"),
+  s("hh*16").gain(0.25),
+  s("~ cp ~ cp").gain(0.6),
+  note("<c2 f2 g2 a1>").s("sawtooth").lpf(600).gain(0.8),
+  note("<[c3,e3,g3,b3] [f3,a3,c4,e4] [g3,b3,d4,f4] [a2,c3,e3,g3]>")
+    .s("sawtooth").lpf(2000).room(0.4).gain(0.5)
+)
+
+const outro = stack(
+  s("bd ~ ~ ~"),
+  note("c3").s("sine").room(0.8).lpf(400).gain(0.3)
+)
+
+arrange(
+  [4, intro],
+  [8, verse],
+  [8, chorus],
+  [8, verse],
+  [8, chorus],
+  [4, outro]
+).cpm(90).play()
+```
+
+### Section Design Guidelines
+- **Intro**: sparse — few layers, simple rhythm, low energy
+- **Verse**: medium density — core beat + bass + one harmonic element
+- **Chorus**: full energy — all layers active, wider stereo, brighter filters
+- **Bridge**: break the pattern — change key, drop drums, shift texture
+- **Outro**: wind down — strip layers, increase reverb/delay, fade gain
+
+Sections should CONTRAST in density, energy, texture, and filter settings.
+Use `const` to name each section before passing to `arrange()`.
+
 ## Available Sounds — ONLY these work. Everything else fails silently!
 
 Drum samples (use with `s()`):
 - `bd` — kick drum
 - `sd` — snare drum
 - `hh` — closed hi-hat
+- `oh` — open hi-hat
 - `lt` — low tom
+- `mt` — mid tom
+- `ht` — high tom
 - `cp` — clap
+- `rim` — rimshot
+- `cr` — crash cymbal
+- `rd` — ride cymbal
+- `cb` — cowbell
 - `noise` — noise hit
 
 Synths (use with `note().s()`):
@@ -86,18 +148,24 @@ Synths (use with `note().s()`):
 - `square` — hollow, good for chiptune and organ sounds
 - `triangle` — soft, good for gentle leads and keys
 - `sine` — pure tone, good for sub-bass and soft pads
+- `.detune(12)` — detune oscillator for richer/fatter sound (use with any synth)
+- `note("c3,e3,g3")` — comma-separated notes for simultaneous chords
+- `.arp("up")`, `.arp("down")`, `.arp("updown")` — arpeggiate chords
 
 Bass samples (use with `note().s()`):
 - `jvbass` — punchy bass
+- `bass1` — round bass
+- `bass3` — aggressive bass
 
 FORBIDDEN — these will produce silence with NO error:
 - NO `.bank()` calls (e.g. `.bank("ve_bk")`) — banks are not loaded
-- NO sample names besides those listed above (no piano, rhodes, organ, epiano, gretsch, kick, snare, oh, bass, superdrums, etc.)
+- NO sample names besides those listed above (no piano, rhodes, organ, epiano, gretsch, kick, snare, bass, superdrums, etc.)
 - NO bare `sawtooth`/`square`/`triangle`/`sine` as JS variables — always use them as strings: `.s("sawtooth")`
 
 Want piano/keys? → `note("c3 e3 g3").s("triangle").lpf(1200)` or `.s("sawtooth").lpf(800)`
 Want organ? → `note("c3").s("square").lpf(800)`
 Want sub-bass? → `note("c1").s("sine")`
+Want thick pad? → `note("c3,e3,g3").s("sawtooth").detune(12).lpf(1200).room(0.5)`
 
 ## Tempo
 - `.cpm(N)` — cycles per minute. Default ~60. For 90 BPM hip hop, use `.cpm(90)`.
