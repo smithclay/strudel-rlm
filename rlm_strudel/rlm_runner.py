@@ -4,7 +4,10 @@ import logging
 import dspy
 from dspy.predict.rlm import RLM, REPLHistory
 from rlm_strudel.browser import StrudelBrowser, BrowserCallback
+from rlm_strudel.interpreter import SingleInjectInterpreter
 from rlm_strudel.prompts import STRUDEL_CONTEXT
+
+logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_INSTRUCTIONS = """You are a music composition orchestrator. You write Python code to compose Strudel music patterns.
 
@@ -42,6 +45,13 @@ IMPORTANT RULES:
 
 class StrudelRLM(RLM):
     """RLM that uses an orchestrator prompt for Python-based composition."""
+
+    def _execute_iteration(self, repl, variables, history, iteration, input_args, output_field_names):
+        result = super()._execute_iteration(repl, variables, history, iteration, input_args, output_field_names)
+        if isinstance(result, REPLHistory) and len(result) > len(history):
+            latest = result.entries[-1]
+            logger.info(f"[sandbox output] {str(latest.output)[:2000]}")
+        return result
 
     def _build_signatures(self):
         inputs_str = ", ".join(f"`{n}`" for n in self.signature.input_fields)
@@ -109,6 +119,7 @@ def run_strudel_rlm(
         max_iterations=max_iters,
         max_llm_calls=max_llm_calls,
         verbose=True,
+        interpreter=SingleInjectInterpreter(),
     )
 
     try:

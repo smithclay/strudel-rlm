@@ -36,7 +36,6 @@ class StrudelBrowser:
         if not self._started:
             self.start()
         try:
-            print(f"[browser] Validating:\n{code}")
             result = self._page.evaluate(
                 "(code) => window.__strudelValidate(code)",
                 code,
@@ -44,9 +43,16 @@ class StrudelBrowser:
             if result.get("success"):
                 return "Valid!"
             else:
-                return f"[Error] {result.get('error', 'Unknown error')}"
+                err = result.get("error", "Unknown error")
+                # Truncate long errors to avoid overwhelming the sandbox
+                if len(err) > 500:
+                    err = err[:500] + "... [truncated]"
+                return f"[Error] {err}"
         except Exception as e:
-            return f"[Error] {e}"
+            err = str(e)
+            if len(err) > 500:
+                err = err[:500] + "... [truncated]"
+            return f"[Error] {err}"
 
     def push_iteration(self, number: int, code: str, valid: bool, error: str | None = None):
         """Push an iteration to the browser timeline UI."""

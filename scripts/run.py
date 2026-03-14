@@ -1,9 +1,11 @@
-"""CLI entry point: starts Vite dev server and runs DSPy RLM for Strudel."""
+"""CLI entry point: starts a static file server and runs DSPy RLM for Strudel."""
 
 import argparse
+import functools
+import http.server
 import os
-import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -19,41 +21,30 @@ load_dotenv(os.path.join(project_root, ".env"))
 from rlm_strudel.rlm_runner import run_strudel_rlm
 
 
-def _wait_for_url(url: str, proc: subprocess.Popen, timeout: float = 20.0):
+def _wait_for_url(url: str, timeout: float = 10.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
-        if proc.poll() is not None:
-            raise RuntimeError(f"Vite exited before becoming ready at {url}")
-
         try:
             with urllib.request.urlopen(url, timeout=1):
                 return
         except urllib.error.URLError:
             time.sleep(0.25)
+    raise RuntimeError(f"Timed out waiting for server at {url}")
 
-    raise RuntimeError(f"Timed out waiting for Vite at {url}")
 
-
-def start_vite(url: str):
-    """Start the Vite dev server as a subprocess and wait until it is ready."""
+def start_static_server(url: str):
+    """Serve dist/ with Python's built-in HTTP server."""
     parsed = urllib.parse.urlparse(url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 5173
-    proc = subprocess.Popen(
-        ["npm", "run", "dev", "--", "--host", host, "--port", str(port), "--strictPort"],
-        cwd=project_root,
-    )
-    _wait_for_url(url, proc)
-    return proc
+    dist_dir = os.path.join(project_root, "dist")
 
-
-def stop_process(proc: subprocess.Popen):
-    proc.terminate()
-    try:
-        proc.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait(timeout=5)
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=dist_dir)
+    server = http.server.HTTPServer((host, port), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    _wait_for_url(url)
+    return server
 
 
 def main():
@@ -62,14 +53,14 @@ def main():
     parser.add_argument("--model", default="openrouter/google/gemini-3-flash-preview", help="LLM model")
     parser.add_argument("--max-iters", type=int, default=10, help="Max RLM iterations (default: 10)")
     parser.add_argument("--max-llm-calls", type=int, default=20, help="Max sub-LLM calls via llm_query (default: 20)")
-    parser.add_argument("--no-vite", action="store_true", help="Skip starting Vite (if already running)")
+    parser.add_argument("--no-server", action="store_true", help="Skip starting the static server (if already running)")
     parser.add_argument("--url", default="http://127.0.0.1:5173", help="Strudel app URL")
     args = parser.parse_args()
 
-    vite_proc = None
-    if not args.no_vite:
-        print(f"Starting Vite dev server at {args.url}...")
-        vite_proc = start_vite(args.url)
+    server = None
+    if not args.no_server:
+        print(f"Starting static server at {args.url}...")
+        server = start_static_server(args.url)
 
     browser = None
     try:
@@ -115,8 +106,8 @@ def main():
     finally:
         if browser:
             browser.shutdown()
-        if vite_proc:
-            stop_process(vite_proc)
+        if server:
+            server.shutdown()
 
 
 if __name__ == "__main__":

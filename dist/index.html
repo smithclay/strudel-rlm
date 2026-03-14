@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Strudel RLM</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      background: #0d0d1a;
+      color: #eee;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      grid-template-columns: 280px 1fr;
+      grid-template-areas:
+        "header header"
+        "timeline main"
+        "controls controls";
+    }
+
+    /* Header */
+    header {
+      grid-area: header;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1.25rem;
+      background: #131325;
+      border-bottom: 1px solid #222;
+    }
+    header h1 { font-size: 1rem; font-weight: 600; letter-spacing: 0.05em; }
+    #phase {
+      font-size: 0.8rem;
+      padding: 0.25rem 0.75rem;
+      border-radius: 999px;
+      background: #1a1a3a;
+      color: #888;
+    }
+    #phase.composing { color: #f0c040; background: #2a2510; }
+    #phase.ready { color: #4ade80; background: #0f2a1a; }
+    #phase.shutting-down { color: #f87171; background: #2a0f0f; }
+
+    /* Timeline sidebar */
+    #timeline {
+      grid-area: timeline;
+      overflow-y: auto;
+      padding: 0.75rem;
+      border-right: 1px solid #222;
+      background: #10101e;
+    }
+    #timeline h2 {
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: #555;
+      margin-bottom: 0.5rem;
+    }
+    .iter-card {
+      padding: 0.5rem 0.6rem;
+      margin-bottom: 0.4rem;
+      border-radius: 6px;
+      border-left: 3px solid #333;
+      background: #161628;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .iter-card:hover { background: #1e1e3a; }
+    .iter-card.selected { background: #1e1e3a; border-left-color: #6366f1; }
+    .iter-card.valid { border-left-color: #4ade80; }
+    .iter-card.error { border-left-color: #f87171; }
+    .iter-card .iter-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.25rem;
+    }
+    .iter-card .iter-num { font-size: 0.8rem; font-weight: 600; }
+    .iter-card .iter-badge {
+      font-size: 0.65rem;
+      padding: 0.1rem 0.4rem;
+      border-radius: 3px;
+    }
+    .iter-card.valid .iter-badge { color: #4ade80; background: #0f2a1a; }
+    .iter-card.error .iter-badge { color: #f87171; background: #2a0f0f; }
+    .iter-card .iter-preview {
+      font-size: 0.7rem;
+      color: #666;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Main panel */
+    #main-panel {
+      grid-area: main;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: 1rem 1.25rem;
+    }
+    #code-display {
+      flex: 1;
+      background: #0a0a16;
+      border: 1px solid #222;
+      border-radius: 8px;
+      padding: 1rem;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-family: 'SF Mono', 'Fira Code', monospace;
+      font-size: 0.85rem;
+      color: #7fdbca;
+      line-height: 1.5;
+    }
+    #viz-area {
+      display: none;
+      margin-top: 0.75rem;
+      height: 120px;
+      border: 1px solid #222;
+      border-radius: 8px;
+      background: #0a0a16;
+    }
+
+    /* Controls footer */
+    #controls {
+      grid-area: controls;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1.25rem;
+      background: #131325;
+      border-top: 1px solid #222;
+    }
+    #controls button {
+      font-family: inherit;
+      font-size: 0.85rem;
+      padding: 0.4rem 1.2rem;
+      border: 1px solid #333;
+      border-radius: 6px;
+      background: #1a1a3a;
+      color: #eee;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    #controls button:hover:not(:disabled) { background: #252550; border-color: #555; }
+    #controls button:disabled { opacity: 0.35; cursor: not-allowed; }
+    #btn-play { border-color: #4ade80; color: #4ade80; }
+    #btn-play:hover:not(:disabled) { background: #0f2a1a; }
+    #btn-stop { border-color: #f0c040; color: #f0c040; }
+    #btn-stop:hover:not(:disabled) { background: #2a2510; }
+    #btn-done { border-color: #f87171; color: #f87171; }
+    #btn-done:hover:not(:disabled) { background: #2a0f0f; }
+  </style>
+  <script type="module" crossorigin src="/assets/index-DmH6Smtn.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Strudel RLM</h1>
+    <span id="phase" class="composing">Composing...</span>
+  </header>
+
+  <aside id="timeline">
+    <h2>Iterations</h2>
+  </aside>
+
+  <main id="main-panel">
+    <pre id="code-display">Waiting for first iteration...</pre>
+    <div id="viz-area"></div>
+  </main>
+
+  <footer id="controls">
+    <button id="btn-play" disabled>&#9654; Play</button>
+    <button id="btn-stop">&#9632; Stop</button>
+    <button id="btn-done" disabled>&#10005; Done</button>
+  </footer>
+
+</body>
+</html>
