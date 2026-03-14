@@ -53,6 +53,7 @@ def main():
     parser.add_argument("--model", default="openrouter/google/gemini-3-flash-preview", help="LLM model")
     parser.add_argument("--max-iters", type=int, default=10, help="Max RLM iterations (default: 10)")
     parser.add_argument("--max-llm-calls", type=int, default=20, help="Max sub-LLM calls via llm_query (default: 20)")
+    parser.add_argument("--max-debate-rounds", type=int, default=3, help="Max composer/critic debate rounds (default: 3)")
     parser.add_argument("--no-server", action="store_true", help="Skip starting the static server (if already running)")
     parser.add_argument("--url", default="http://127.0.0.1:5173", help="Strudel app URL")
     args = parser.parse_args()
@@ -66,13 +67,14 @@ def main():
     try:
         print(f"\nGenerating pattern for: {args.query}")
         print(f"Using model: {args.model}")
-        print(f"Max iterations: {args.max_iters}\n")
+        print(f"Max iterations: {args.max_iters}, Max debate rounds: {args.max_debate_rounds}\n")
 
         result, browser = run_strudel_rlm(
             args.query,
             args.model,
             args.max_iters,
             max_llm_calls=args.max_llm_calls,
+            max_debate_rounds=args.max_debate_rounds,
             url=args.url,
         )
 
