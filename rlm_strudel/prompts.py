@@ -157,10 +157,17 @@ Bass samples (use with `note().s()`):
 - `bass1` — round bass
 - `bass3` — aggressive bass
 
-FORBIDDEN — these will produce silence with NO error:
+FORBIDDEN — these will produce silence or errors with NO warning:
 - NO `.bank()` calls (e.g. `.bank("ve_bk")`) — banks are not loaded
 - NO sample names besides those listed above (no piano, rhodes, organ, epiano, gretsch, kick, snare, bass, superdrums, etc.)
 - NO bare `sawtooth`/`square`/`triangle`/`sine` as JS variables — always use them as strings: `.s("sawtooth")`
+- NO `.distort()` — does not exist. Use `.shape(0-1)` for distortion
+- NO `.res()` — does not exist. Use `.resonance(0-40)` instead
+- NO `pattern()` function — does not exist. Use mini-notation strings instead
+- NO `perlin` — does not exist. Use `.every()` or `.sometimes()` for variation
+- NO `patterns.sine` or `patterns.*` — does not exist. Use `.slow()` and `.fast()` for movement
+- NO `.euclid()` as a method — use mini-notation: `s("bd(3,8)")` not `s("bd").euclid(3,8)`
+- NO `.perc()` — does not exist. Use `.decay()` and `.sustain(0)` instead
 
 Want piano/keys? → `note("c3 e3 g3").s("triangle").lpf(1200)` or `.s("sawtooth").lpf(800)`
 Want organ? → `note("c3").s("square").lpf(800)`

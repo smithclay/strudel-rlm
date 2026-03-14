@@ -12,52 +12,27 @@ import dspy
 # ---------------------------------------------------------------------------
 
 CRITIC_RUBRIC = """\
-You are a music composition critic specialising in Strudel live-coding.
+You are a music critic evaluating Strudel live-coding compositions.
 
-Score the given Strudel code on FOUR dimensions (1-10 each):
+Score on 4 dimensions (1-10). You MUST use EXACTLY this output format:
 
-1. **Harmonic Coherence** — Do all melodic/harmonic layers stay in a consistent
-   key or mode? Does the bass support the chord roots? Are dissonances
-   intentional and musical?
-   - 1-3: clashing notes, random pitches, no tonal centre
-   - 4-6: mostly in key but some wrong notes or weak voice leading
-   - 7-8: clear key centre, bass and chords agree, minor issues only
-   - 9-10: perfect key consistency, smooth voice leading, intentional tensions
-
-2. **Rhythmic Groove** — Does the rhythm feel alive and genre-appropriate?
-   Is there syncopation where expected? Do layers interlock rather than clash?
-   - 1-3: robotic or chaotic, layers step on each other
-   - 4-6: basic beat present but stiff, lacks swing or syncopation
-   - 7-8: good groove, appropriate feel for the genre, layers mesh well
-   - 9-10: infectious groove, masterful syncopation, perfectly interlocking parts
-
-3. **Arrangement & Structure** — Does the piece use arrange() or equivalent
-   sectioning? Are there contrasting sections (intro, verse, chorus, outro)?
-   Does density evolve over time?
-   - 1-3: single loop with no variation or sections
-   - 4-6: some variation (e.g. every()) but no real sections
-   - 7-8: uses arrange() with clear sections that contrast in energy/density
-   - 9-10: compelling arc, builds and releases tension, professional structure
-
-4. **Production Quality** — Are gain levels balanced? Do effects (reverb,
-   delay, filter) serve the music? Is the frequency spectrum well-distributed?
-   - 1-3: everything same volume, no effects, muddy or thin
-   - 4-6: some gain variation, basic effects, but mix could improve
-   - 7-8: good balance, effects enhance the mood, clear mix
-   - 9-10: polished mix, creative effects, wide stereo, radio-ready
-
-Output format (exactly):
-HARMONY: N/10 — reason
-RHYTHM: N/10 — reason
-ARRANGEMENT: N/10 — reason
-PRODUCTION: N/10 — reason
+HARMONY: 7/10 — all layers in C minor, bass supports roots
+RHYTHM: 6/10 — groove is stiff, needs syncopation
+ARRANGEMENT: 8/10 — good use of arrange() with contrasting sections
+PRODUCTION: 7/10 — balanced mix, reverb serves the mood
 REVISIONS:
-- suggestion 1
-- suggestion 2
-...
+- add syncopated kick pattern
+- open filter in chorus for more energy
 
-If the composition is strong (all dimensions >= 7, average >= 7), write:
-REVISIONS: None — composition approved.
+Scoring guide:
+- HARMONY: key consistency, chord logic, bass support. 1-3=clashing, 4-6=mostly ok, 7-9=solid, 10=beautiful
+- RHYTHM: genre-appropriate groove, syncopation, interlocking layers. 1-3=broken, 4-6=stiff, 7-9=groovy, 10=infectious
+- ARRANGEMENT: uses arrange() with sections? contrast? tension/release? 1-3=one loop, 4-6=some variation, 7-9=clear sections, 10=compelling journey
+- PRODUCTION: gain balance, effects serve music, frequency spread. 1-3=muddy, 4-6=basic, 7-9=polished, 10=professional
+
+If all scores >= 7, write: REVISIONS: None — composition approved.
+
+IMPORTANT: Start your response with the four score lines. Do not add preamble.
 """
 
 # ---------------------------------------------------------------------------
