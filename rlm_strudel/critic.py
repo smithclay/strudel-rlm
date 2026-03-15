@@ -24,8 +24,8 @@ RHYTHM: 6/10 — groove is stiff, needs syncopation
 ARRANGEMENT: 8/10 — good use of arrange() with contrasting sections
 PRODUCTION: 7/10 — balanced mix, reverb serves the mood
 REVISIONS:
-- add syncopated kick pattern
-- open filter in chorus for more energy
+- [chorus] open lpf from 400→1200 on the sawtooth chord layer for more energy
+- [verse] add syncopated kick: change "bd ~ ~ ~" to "bd ~ [~ bd] ~"
 
 Scoring guide:
 - HARMONY: key consistency, chord logic, bass support. 1-3=clashing, 4-6=mostly ok, 7-9=solid, 10=beautiful
@@ -33,9 +33,16 @@ Scoring guide:
 - ARRANGEMENT: uses arrange() with sections? contrast? tension/release? 1-3=one loop, 4-6=some variation, 7-9=clear sections, 10=compelling journey
 - PRODUCTION: gain balance, effects serve music, frequency spread. 1-3=muddy, 4-6=basic, 7-9=polished, 10=professional
 
+REVISION RULES — for each dimension scoring below 7:
+- Reference the specific section (intro/verse/chorus/bridge/outro) and layer (kick, snare, bass, chord, lead, etc.) that needs work.
+- Suggest a concrete fix with actual values (e.g., "change lpf(400) to lpf(1200)", "add .delay(0.3)").
+- Do NOT give vague feedback like "add more energy" — say WHERE and HOW.
+
 If all scores >= 7, write: REVISIONS: None — composition approved.
 
 IMPORTANT: Start your response with the four score lines. Do not add preamble.
+
+CRITICAL: Use a 1-10 scale. Write "7/10" NOT "3.5/5" or "4/5". Each line: DIMENSION: N/10 — reason
 """
 
 # ---------------------------------------------------------------------------
@@ -92,8 +99,18 @@ class CriticResult:
             lines.append("REVISIONS:")
             for rev in self.revisions:
                 lines.append(f"  - {rev}")
-        else:
+        elif self.approved:
             lines.append("REVISIONS: None — composition approved.")
+        else:
+            # Scores are below threshold but no specific revisions were parsed.
+            # Generate generic feedback from low-scoring dimensions so the
+            # composer knows what to fix.
+            lines.append("REVISIONS:")
+            for dim, score in [("harmony", self.harmony), ("rhythm", self.rhythm),
+                               ("arrangement", self.arrangement), ("production", self.production)]:
+                if score < 7:
+                    reason = self.reasons.get(dim, "needs improvement")
+                    lines.append(f"  - [{dim}] scored {score}/10 — {reason}")
         return "\n".join(lines)
 
     def __repr__(self) -> str:
@@ -144,6 +161,12 @@ def _normalize_dim(raw: str) -> str | None:
     return None
 
 
+def _clean_reason(text: str) -> str:
+    """Strip markdown artifacts from a reason string."""
+    text = re.sub(r"\*+", "", text).strip().rstrip(".-—: ")
+    return text if len(text) > 2 else ""
+
+
 def parse_critic_output(text: str) -> CriticResult:
     """Parse the critic's textual output into a structured CriticResult.
 
@@ -159,7 +182,7 @@ def parse_critic_output(text: str) -> CriticResult:
             dim = _normalize_dim(m.group(1))
             if dim and dim not in scores:
                 scores[dim] = min(int(m.group(2)), 10)
-                reason = (m.group(3) or "").strip().rstrip(".")
+                reason = _clean_reason(m.group(3) or "")
                 if reason:
                     reasons[dim] = reason
 
@@ -169,8 +192,10 @@ def parse_critic_output(text: str) -> CriticResult:
             for m in pattern.finditer(text):
                 dim = _normalize_dim(m.group(1))
                 if dim and dim not in scores:
-                    scores[dim] = min(int(m.group(2)) * 2, 10)
-                    reason = (m.group(3) or "").strip().rstrip(".")
+                    raw_score = int(m.group(2))
+                    scores[dim] = min(raw_score * 2, 10)
+                    logger.warning(f"[critic] /5 fallback fired: {dim}={raw_score}/5 → {scores[dim]}/10")
+                    reason = _clean_reason(m.group(3) or "")
                     if reason:
                         reasons[dim] = reason
 
@@ -204,6 +229,31 @@ def parse_critic_output(text: str) -> CriticResult:
                 line = re.sub(r"^[-*•]\s*", "", line).strip()
                 if line and len(line) > 3 and not line.startswith("HARMONY") and not line.startswith("RHYTHM"):
                     revisions.append(line)
+
+    # Fallback: extract *Improvement:* or *Suggestion:* lines from prose output
+    # (Gemini Flash often embeds feedback inline instead of a REVISIONS block)
+    if not revisions:
+        for m in re.finditer(
+            r"\*(?:Improvement|Suggestion|Fix|Issue|Recommendation)[:]*\*\s*[:]*\s*(.+)",
+            text, re.IGNORECASE,
+        ):
+            rev = m.group(1).strip().rstrip(".")
+            if rev and len(rev) > 5:
+                revisions.append(rev)
+
+    # Second fallback: pull bullet points that look like actionable feedback
+    if not revisions:
+        for line in text.splitlines():
+            line = line.strip()
+            # Match lines starting with - or * that contain actionable keywords
+            bullet = re.match(r"^[-*•]\s+(.+)", line)
+            if bullet:
+                content = bullet.group(1).strip()
+                # Filter for lines that look like revision suggestions
+                action_words = ("add", "change", "increase", "decrease", "open", "remove",
+                                "replace", "use", "try", "consider", "swap", "introduce")
+                if any(content.lower().startswith(w) for w in action_words) and len(content) > 10:
+                    revisions.append(content.rstrip("."))
 
     return CriticResult(
         harmony=scores.get("harmony", 5),

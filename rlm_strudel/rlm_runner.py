@@ -1,62 +1,159 @@
 """DSPy RLM configuration and orchestration for Strudel pattern generation."""
 
 import logging
+import re
 import dspy
 from dspy.predict.rlm import RLM, REPLHistory
 from rlm_strudel.browser import StrudelBrowser, BrowserCallback
 from rlm_strudel.interpreter import SingleInjectInterpreter
-from rlm_strudel.prompts import STRUDEL_CONTEXT
+from rlm_strudel.prompts import STRUDEL_CONTEXT, extract_context_sections
 from rlm_strudel.critic import StrudelCritic
 from rlm_strudel.references import select_references, format_references_for_prompt
 from rlm_strudel.library import RunTrace, save_run
-from rlm_strudel.sanitizer import sanitize_strudel
+from rlm_strudel.sanitizer import extract_section_code, sanitize_strudel, validate_semantic
 
 logger = logging.getLogger(__name__)
 
 ORCHESTRATOR_INSTRUCTIONS = """You are a music composition orchestrator. You write Python code to compose Strudel music patterns.
 
-You have access to the following variables and functions:
+All reference material is pre-loaded. Start composing immediately — do NOT use print() to explore context.
 
-Variables:
-- `context`: Strudel API reference + pattern library ({context_len} chars). DO NOT read it all — use Python string slicing and `.find()` to extract relevant sections.
-- `query`: The user's musical request.
+Variables (pre-organized — use directly, no slicing needed):
+- `sounds`: Available drum samples, synths, and bass sounds
+- `forbidden`: Complete list of functions/patterns that DO NOT EXIST — read this first!
+- `effects`: Effects recipes (lo-fi, spacey, aggressive, etc.)
+- `genres`: Genre pattern library (hip hop, techno, ambient, etc.)
+- `api`: Core functions, pattern transforms, combining patterns, song structure
+- `examples`: Example compositions
+- `context`: Full reference (for edge cases only)
+- `query`: The user's musical request
 
-Built-in functions:
-- `llm_query(prompt)` → str: Delegate a task to a sub-agent. Use this to generate Strudel code snippets. Pass relevant slices of `context` so the sub-agent knows the API and available sounds.
-- `validate_code(code)` → str: Validate a Strudel code string in the browser. Returns "Valid!" or "[Error] ...".
-- `print(...)`: Inspect variables and results. This is how you see output between iterations.
-- `SUBMIT(strudel_code, explanation)`: Submit final composition. First arg = complete Strudel code string, second arg = explanation string.
+Functions:
+- `compose_section(prompt, previous_code="")` → str: Generate Strudel code via sub-agent. The FORBIDDEN list and available sounds are automatically included. Returns sanitized code. Pass previous_code when revising an existing section. Use this instead of llm_query().
+- `validate_code(code)` → str: Validate Strudel code in the browser. Returns "Valid!" or "[Error] ...".
+- `print(...)`: Inspect variables and results.
+- `SUBMIT(strudel_code, explanation)`: Submit final composition.
 
 You are producing: {output_fields}
 
-Workflow:
-1. EXPLORE: Use print() to slice and inspect relevant sections of `context` for your task. Look for section headers with `context.find("## Section Name")`. Find genre examples, rhythm templates, effects recipes, available sounds, and REFERENCE COMPOSITIONS.
-2. COMPOSE SECTIONS: Build the composition in sections — use llm_query() to generate each section (intro, verse, chorus, bridge, outro) as separate `const` variables using `stack()`. Pass focused context slices and reference examples so the sub-agent has the API reference it needs.
-3. VALIDATE: Use validate_code() on each section individually and on the combined result. If validation fails, fix or regenerate.
-4. STRUCTURE: Wire sections together using `arrange([cycles, pattern], ...)`. Set appropriate cycle durations per section. Ensure sections contrast in energy, density, and texture.
-5. SUBMIT: When the full arranged composition validates, call SUBMIT(strudel_code, explanation).
+Workflow — 3 steps only:
+1. COMPOSE: Use compose_section() to generate each section (intro, verse, chorus, outro) as `const` variables using `stack()`. Include genre/effects context in your prompt. Example:
+   ```python
+   intro_code = compose_section("Write a sparse intro section for a lo-fi hip hop track at cpm(82). Use bd, hh, and a triangle chord pad. 4 layers max.")
+   print(intro_code)
+   ```
+2. VALIDATE: Use validate_code() on each section and the final arranged result. Fix errors inline.
+3. SUBMIT: Assemble sections with arrange(), validate, and call SUBMIT(code, explanation).
 
-Variables persist between iterations. Build up your composition incrementally.
-Write pure Python — Strudel code only appears as string values.
+Example iteration pattern:
+```python
+# Iteration 1: Generate all sections
+intro = compose_section("Sparse intro: kick + hi-hat + soft pad. Lo-fi hip hop at cpm(82).")
+verse = compose_section("Verse: add snare, bass, fuller chords. Lo-fi hip hop at cpm(82).")
+chorus = compose_section("Chorus: full energy, all layers, brighter filters. Lo-fi hip hop at cpm(82).")
+outro = compose_section("Outro: strip back to kick + pad, more reverb. Lo-fi hip hop at cpm(82).")
+print("Generated all sections")
+```
+```python
+# Iteration 2: Assemble and validate
+full_code = f\"\"\"const intro = stack(
+{{intro}}
+)
+
+const verse = stack(
+{{verse}}
+)
+
+const chorus = stack(
+{{chorus}}
+)
+
+const outro = stack(
+{{outro}}
+)
+
+arrange(
+  [4, intro],
+  [8, verse],
+  [8, chorus],
+  [8, verse],
+  [8, chorus],
+  [4, outro]
+).cpm(82).play()\"\"\"
+result = validate_code(full_code)
+print(result)
+```
+```python
+# Iteration 3: Submit if valid
+SUBMIT(full_code, "Lo-fi hip hop composition with 4 contrasting sections")
+```
+
+REVISION MODE:
+If `query` contains '## Critic Feedback', you are in revision mode. Read the previous code and the critic's specific feedback. Only regenerate sections the critic flagged. Keep sections that scored well.
+
+Example revision workflow:
+```python
+# The critic flagged the chorus and verse. Keep intro and outro as-is.
+# Previous intro code is fine — reuse it directly.
+old_intro = "s(\"bd ~ ~ ~\"),\\n  s(\"hh*4\").gain(0.2)"
+
+# Regenerate only flagged sections with specific fixes
+new_chorus = compose_section(
+    "Fix the chorus for a lo-fi hip hop track at cpm(82). "
+    "Open the lpf from 400 to 1200 on the chord layer for more energy. "
+    "Add a clap on beat 4.",
+    previous_code="s(\"bd ~ [~ bd] ~\"),\\n  s(\"~ sd ~ sd\").gain(0.7),\\n  note(\"...\").s(\"triangle\").lpf(400).gain(0.5)"
+)
+print(new_chorus)
+```
 
 IMPORTANT RULES:
-- Always end Strudel code strings with .play()
-- Use stack() to layer multiple patterns within each section
-- Use arrange() to sequence sections into a full song (intro, verse, chorus, etc.)
+- Do NOT use print() to explore context — it's already organized for you
+- Do NOT use llm_query() — use compose_section() instead (it includes forbidden list automatically)
+- Always end Strudel code with .play()
+- Use stack() to layer patterns, arrange() to sequence sections
 - Use `const` to name each section before arrange()
-- Drums: bd, sd, hh, oh, lt, mt, ht, cp, rim, cr, rd, cb, noise
-- Bass: jvbass, bass1, bass3
-- Synths (as strings in .s()): "sawtooth", "square", "triangle", "sine"
-- Technique: .detune(N) for fat pads, note("c3,e3,g3") for chords, .arp("up") for arpeggios
-- NEVER use .bank() — it will silently fail
-- NEVER use .distort(), .res(), .lpq(), .fadeOut(), .fadeIn(), .adsr(), .perc(), .chord() — they don't exist
-- NEVER use pattern(), perlin, patterns.*, sine.range(), saw() — they don't exist
-- NEVER use chord shorthand like note("c3'7") — use comma-separated: note("c3,e3,g3,bb3")
-- Use .resonance(0-40) for filter resonance, .shape(0-1) for distortion
-- Use separate .attack(), .decay(), .sustain(), .release() — NOT .adsr()
-- Use mini-notation for Euclidean: s("bd(3,8)") — NOT .euclid()
-- Use .cpm(N) for tempo, NOT setbpm
 - Sections should CONTRAST: intro=sparse, verse=medium, chorus=full energy, outro=wind down"""
+
+
+def parse_sections_from_code(code: str) -> dict[str, str]:
+    """Extract const NAME = stack(...) blocks from Strudel code using paren-depth counting.
+
+    Returns {"intro": "inner code...", "verse": "inner code...", ...}.
+    """
+    sections: dict[str, str] = {}
+    for m in re.finditer(r"const\s+(\w+)\s*=\s*stack\s*\(", code):
+        name = m.group(1).lower()
+        # Find matching close paren using depth counting
+        depth = 0
+        start = m.end() - 1  # position of '('
+        for i in range(start, len(code)):
+            if code[i] == "(":
+                depth += 1
+            elif code[i] == ")":
+                depth -= 1
+                if depth == 0:
+                    inner = code[m.end():i].strip()
+                    sections[name] = inner
+                    break
+    return sections
+
+
+def identify_flagged_sections(revisions: list[str]) -> set[str]:
+    """Scan revision strings for section names. Returns set of flagged sections.
+
+    Defaults to {"verse", "chorus"} if no sections explicitly named.
+    """
+    section_names = {"intro", "verse", "chorus", "bridge", "outro", "buildup", "drop", "breakdown"}
+    flagged: set[str] = set()
+    for rev in revisions:
+        rev_lower = rev.lower()
+        for name in section_names:
+            if name in rev_lower:
+                flagged.add(name)
+    if not flagged:
+        flagged = {"verse", "chorus"}
+    return flagged
 
 
 class StrudelRLM(RLM):
@@ -84,14 +181,13 @@ class StrudelRLM(RLM):
 
         action_sig = (
             dspy.Signature({}, task_instructions + ORCHESTRATOR_INSTRUCTIONS.format(
-                context_len=len(STRUDEL_CONTEXT),
                 output_fields=output_fields,
             ) + tool_docs)
             .append("variables_info", dspy.InputField(desc="Metadata about the variables available in the REPL"), type_=str)
             .append("repl_history", dspy.InputField(desc="Previous REPL code executions and their outputs"), type_=REPLHistory)
             .append("iteration", dspy.InputField(desc="Current iteration number (1-indexed) out of max_iterations"), type_=str)
             .append("reasoning", dspy.OutputField(desc="Brief: what to explore, generate, or fix next. If composition is valid and complete, SUBMIT."), type_=str)
-            .append("code", dspy.OutputField(desc="Python code. Use print(), llm_query(), validate_code(), SUBMIT(). Use ```python code block."), type_=str)
+            .append("code", dspy.OutputField(desc="Python code. Use compose_section(), validate_code(), SUBMIT(). Use ```python code block."), type_=str)
         )
 
         extract_instructions = """Based on the REPL trajectory, extract the final outputs now.
@@ -142,9 +238,67 @@ def run_strudel_rlm(
     context_with_refs = STRUDEL_CONTEXT + "\n\n" + refs_text
     print(f"[strudel] Selected {len(refs)} reference compositions")
 
+    # Pre-extract named sections for direct sandbox injection
+    ctx_sections = extract_context_sections(context_with_refs)
+    print(f"[strudel] Pre-organized context: {', '.join(ctx_sections.keys())}")
+
+    # Top 2 references for compose_section (limit tokens)
+    refs_text_short = format_references_for_prompt(refs[:2])
+
+    # Build compose_section tool — wraps llm_query with FORBIDDEN + sounds prepended
+    def compose_section(prompt: str, previous_code: str = "") -> str:
+        """Generate a Strudel code section via sub-agent with forbidden list and sounds automatically included."""
+        enriched_prompt = (
+            f"You are generating Strudel (JavaScript) live-coding music.\n\n"
+            f"CRITICAL — these functions DO NOT EXIST, never use them:\n"
+            f"{ctx_sections['forbidden']}\n\n"
+            f"AVAILABLE SOUNDS (ONLY these work):\n"
+            f"{ctx_sections['sounds']}\n\n"
+            f"API REFERENCE:\n"
+            f"{ctx_sections['api']}\n\n"
+            f"EFFECTS RECIPES:\n"
+            f"{ctx_sections['effects']}\n\n"
+            f"GENRE PATTERNS (use as templates):\n"
+            f"{ctx_sections['genres']}\n\n"
+            f"REFERENCE COMPOSITIONS (study these for style):\n"
+            f"{refs_text_short}\n\n"
+        )
+        if previous_code:
+            enriched_prompt += (
+                f"PREVIOUS CODE (revise this, don't start from scratch):\n"
+                f"{previous_code}\n\n"
+            )
+        enriched_prompt += (
+            f"TASK: {prompt}\n\n"
+            f"Return ONLY the Strudel code lines (the contents inside stack()), no markdown, no explanation."
+        )
+        # Use dspy's built-in llm_query via a simple LM call
+        result = dspy.settings.lm(enriched_prompt)[0]
+        # Extract clean section code from any LLM output format
+        result = extract_section_code(result)
+        # Sanitize the output
+        result = sanitize_strudel(result)
+
+        # Section-level validation with one retry
+        test_code = f"stack(\n{result}\n).play()"
+        validation = browser.validate_code(test_code)
+        if validation != "Valid!":
+            logger.warning(f"[compose_section] Invalid: {validation}")
+            retry_prompt = enriched_prompt + f"\n\nERROR in your output: {validation}\nFix and return corrected code."
+            result = dspy.settings.lm(retry_prompt)[0]
+            result = extract_section_code(result)
+            result = sanitize_strudel(result)
+
+        # Semantic check — log warnings but don't block
+        violations = validate_semantic(result)
+        if violations:
+            logger.warning(f"[compose_section] Semantic violations in sub-agent output: {violations}")
+        return result
+
     critic = StrudelCritic()
     best_result = None
     best_score = 0.0
+    critique = None
 
     for debate_round in range(1, max_debate_rounds + 1):
         print(f"\n[strudel] === Debate Round {debate_round}/{max_debate_rounds} ===")
@@ -152,19 +306,26 @@ def run_strudel_rlm(
         # Build the composer query — include critic feedback after round 1
         composer_query = query
         if best_result and hasattr(best_result, '_critic_feedback'):
+            # Mechanical revision: parse sections and identify what to keep vs regenerate
+            sections = parse_sections_from_code(best_result.strudel_code)
+            flagged = identify_flagged_sections(critique.revisions if critique else set())
+
             composer_query = (
                 f"{query}\n\n"
-                f"## Critic Feedback from Previous Round\n"
-                f"The critic scored your previous attempt and wants these revisions:\n"
-                f"{best_result._critic_feedback}\n\n"
-                f"## Previous Code (to revise, not start from scratch)\n"
-                f"```\n{best_result.strudel_code}\n```\n\n"
-                f"Fix the issues the critic identified while keeping what scored well."
+                f"## Revision Mode — Targeted Fixes\n"
+                f"SECTIONS TO KEEP (already good — copy these directly):\n"
             )
+            for name, code in sections.items():
+                if name not in flagged:
+                    composer_query += f"\n### {name} (KEEP)\n```\n{code}\n```\n"
+            composer_query += f"\nSECTIONS TO REGENERATE:\n"
+            for name in flagged:
+                composer_query += f"- {name}\n"
+            composer_query += f"\nCritic feedback:\n{best_result._critic_feedback}\n"
 
         rlm = StrudelRLM(
-            "context, query -> strudel_code, explanation",
-            tools=[browser.validate_code],
+            "sounds, forbidden, effects, genres, api, examples, context, query -> strudel_code, explanation",
+            tools=[browser.validate_code, compose_section],
             max_iterations=max_iters,
             max_llm_calls=max_llm_calls,
             verbose=True,
@@ -173,7 +334,16 @@ def run_strudel_rlm(
 
         try:
             print("[strudel] Starting composer RLM loop...")
-            result = rlm(context=context_with_refs, query=composer_query)
+            result = rlm(
+                sounds=ctx_sections["sounds"],
+                forbidden=ctx_sections["forbidden"],
+                effects=ctx_sections["effects"],
+                genres=ctx_sections["genres"],
+                api=ctx_sections["api"],
+                examples=ctx_sections["examples"],
+                context=context_with_refs,
+                query=composer_query,
+            )
         except Exception:
             browser.shutdown()
             raise
@@ -189,6 +359,11 @@ def run_strudel_rlm(
         if len(code) != raw_len:
             logger.info(f"[sanitizer] Cleaned {raw_len - len(code)} chars of junk")
         result.strudel_code = code
+
+        # Semantic validation — check for remaining forbidden patterns
+        violations = validate_semantic(code)
+        if violations:
+            logger.warning(f"[semantic] Post-sanitize violations: {violations}")
 
         # Re-validate after sanitization
         validation = browser.validate_code(code)

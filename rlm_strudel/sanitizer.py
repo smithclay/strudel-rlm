@@ -3,6 +3,84 @@
 from __future__ import annotations
 
 import re
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def extract_section_code(raw: str) -> str:
+    """Extract clean inner-stack code from any LLM output format.
+
+    Handles: raw lines, stack() wrapper, const NAME = stack(...), arrange(...) blocks.
+    Returns just the inner contents suitable for wrapping in stack().
+    """
+    # Strip markdown fences first
+    raw = re.sub(r"```(?:javascript|js|strudel)?\s*\n?", "", raw).strip()
+
+    # If output contains arrange(...), extract only the first stack() body and warn
+    if "arrange(" in raw:
+        logger.warning("[extract_section_code] Output contains arrange() — extracting first stack() body only")
+        body = _extract_first_stack_body(raw)
+        if body is not None:
+            return body
+
+    # If output contains `const NAME = stack(`, extract the inner contents
+    const_match = re.search(r"const\s+\w+\s*=\s*stack\s*\(", raw)
+    if const_match:
+        body = _extract_paren_contents(raw, const_match.end() - 1)
+        if body is not None:
+            return _strip_trailing_chains(body)
+
+    # If output is wrapped in stack(...), extract inner contents
+    stack_match = re.match(r"^\s*stack\s*\(", raw)
+    if stack_match:
+        body = _extract_paren_contents(raw, stack_match.end() - 1)
+        if body is not None:
+            return _strip_trailing_chains(body)
+
+    # No wrappers — return as-is (already just inner lines), but strip trailing chains
+    return _strip_trailing_chains(raw)
+
+
+def _extract_first_stack_body(code: str) -> str | None:
+    """Extract the body of the first stack() call in the code."""
+    match = re.search(r"stack\s*\(", code)
+    if match:
+        return _extract_paren_contents(code, match.end() - 1)
+    return None
+
+
+def _extract_paren_contents(code: str, open_pos: int) -> str | None:
+    """Extract contents between matching parens using depth counting.
+
+    open_pos should point to the opening '('.
+    """
+    if open_pos >= len(code) or code[open_pos] != "(":
+        return None
+    depth = 0
+    start = open_pos + 1
+    for i in range(open_pos, len(code)):
+        if code[i] == "(":
+            depth += 1
+        elif code[i] == ")":
+            depth -= 1
+            if depth == 0:
+                inner = code[start:i].strip()
+                # Remove leading/trailing newlines but preserve internal structure
+                return inner
+    return None
+
+
+def _strip_trailing_chains(code: str) -> str:
+    """Strip trailing .cpm(N).play() or .play() chains from code."""
+    code = code.strip()
+    # Remove trailing .play() and optional semicolons
+    code = re.sub(r"\s*\.play\(\)\s*;?\s*$", "", code)
+    # Remove trailing .cpm(N)
+    code = re.sub(r"\s*\.cpm\(\d+\)\s*$", "", code)
+    # One more pass in case .cpm came before .play
+    code = re.sub(r"\s*\.play\(\)\s*;?\s*$", "", code)
+    return code.strip()
 
 
 def sanitize_strudel(code: str) -> str:
@@ -89,3 +167,44 @@ def sanitize_strudel(code: str) -> str:
     code = re.sub(r"\n{3,}", "\n\n", code)
 
     return code.strip() + "\n"
+
+
+# Patterns that indicate hallucinated/forbidden API usage
+_SEMANTIC_VIOLATIONS = [
+    (r"\.bank\(", ".bank() — banks are not loaded"),
+    (r"\.distort\(", ".distort() — use .shape(0-1) instead"),
+    (r"\.lpq\(", ".lpq() — use .resonance(0-40) instead"),
+    (r"\.res\(", ".res() — use .resonance(0-40) instead"),
+    (r"\.adsr\(", ".adsr() — use separate .attack()/.decay()/.sustain()/.release()"),
+    (r"\.fadeIn\(", ".fadeIn() — does not exist"),
+    (r"\.fadeOut\(", ".fadeOut() — does not exist"),
+    (r"\.perc\(", ".perc() — use .decay() and .sustain(0) instead"),
+    (r"\.chord\(", ".chord() — use comma-separated notes in note()"),
+    (r"\.euclid\(", ".euclid() — use mini-notation s(\"bd(3,8)\") instead"),
+    (r"\bpattern\(", "pattern() — does not exist"),
+    (r"\bperlin\b", "perlin — does not exist"),
+    (r"patterns\.\w+", "patterns.* — does not exist"),
+    (r"sine\.range\(", "sine.range() — does not exist"),
+    (r"\bsaw\(", "saw() — does not exist as standalone"),
+    (r"\.arp\(\"(?!up\"|down\"|updown\")", "invalid arp mode — only up/down/updown"),
+    (r'\.s\("supersaw"\)', "supersaw — use sawtooth instead"),
+    (r'\.s\("superpulse"\)', "superpulse — use square instead"),
+    (r'\.s\("superreese"\)', "superreese — use sawtooth instead"),
+    (r'\.s\("melodica"\)', "melodica — use sawtooth instead"),
+    (r'\.s\("gm_\w+"\)', "gm_* synths — not available"),
+    (r"\bsetbpm\b", "setbpm — use .cpm(N) instead"),
+    (r"\bline\(", "line() — does not exist"),
+    (r"note\([^)]*'[0-9]", "chord shorthand (e.g. '7) — use comma-separated notes"),
+]
+
+
+def validate_semantic(code: str) -> list[str]:
+    """Check for forbidden/hallucinated API patterns in Strudel code.
+
+    Returns a list of violation descriptions. Empty list means clean.
+    """
+    violations = []
+    for pattern, description in _SEMANTIC_VIOLATIONS:
+        if re.search(pattern, code):
+            violations.append(description)
+    return violations

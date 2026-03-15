@@ -35,9 +35,9 @@ def test_imports():
 
 
 def test_orchestrator_has_new_features():
-    """ORCHESTRATOR_INSTRUCTIONS contains expected v2 keywords."""
+    """ORCHESTRATOR_INSTRUCTIONS contains expected v3 keywords."""
     from rlm_strudel.rlm_runner import ORCHESTRATOR_INSTRUCTIONS
-    for keyword in ["arrange()", "oh", "bass1", "detune", "STRUCTURE"]:
+    for keyword in ["compose_section", "validate_code", "SUBMIT", "arrange()", "forbidden"]:
         assert keyword in ORCHESTRATOR_INSTRUCTIONS, f"Missing '{keyword}' in ORCHESTRATOR_INSTRUCTIONS"
 
 
@@ -96,14 +96,203 @@ def test_run_function_signature():
     assert isinstance(default, int), f"Expected int default, got {type(default)}"
 
 
+def test_extract_context_sections():
+    """extract_context_sections returns all expected keys with content."""
+    from rlm_strudel.prompts import STRUDEL_CONTEXT, extract_context_sections
+    sections = extract_context_sections(STRUDEL_CONTEXT)
+    for key in ["sounds", "forbidden", "effects", "genres", "api", "examples"]:
+        assert key in sections, f"Missing section key '{key}'"
+        assert len(sections[key]) > 50, f"Section '{key}' too short: {len(sections[key])} chars"
+    # Verify content correctness
+    assert "bd" in sections["sounds"], "sounds section missing 'bd'"
+    assert ".bank()" in sections["forbidden"], "forbidden section missing '.bank()'"
+    assert "Lo-fi" in sections["effects"], "effects section missing 'Lo-fi'"
+    assert "Hip Hop" in sections["genres"], "genres section missing 'Hip Hop'"
+    assert "note(" in sections["api"], "api section missing 'note('"
+
+
+def test_validate_semantic():
+    """validate_semantic catches forbidden patterns."""
+    from rlm_strudel.sanitizer import validate_semantic
+    # Clean code should have no violations
+    clean = 'note("c3 e3 g3").s("sawtooth").lpf(800).play()\n'
+    assert validate_semantic(clean) == [], f"Expected no violations for clean code, got {validate_semantic(clean)}"
+    # Forbidden patterns should be caught
+    dirty = '.bank("ve_bk").distort(0.5).adsr(0.1, 0.2, 0.5, 0.3)'
+    violations = validate_semantic(dirty)
+    assert len(violations) >= 3, f"Expected >= 3 violations, got {len(violations)}: {violations}"
+
+
+def test_orchestrator_no_explore_step():
+    """Orchestrator instructions should NOT contain EXPLORE step."""
+    from rlm_strudel.rlm_runner import ORCHESTRATOR_INSTRUCTIONS
+    assert "EXPLORE" not in ORCHESTRATOR_INSTRUCTIONS, "ORCHESTRATOR_INSTRUCTIONS still contains EXPLORE step"
+    assert "context.find" not in ORCHESTRATOR_INSTRUCTIONS, "ORCHESTRATOR_INSTRUCTIONS still references context.find()"
+
+
+def test_extract_section_code_raw_lines():
+    """extract_section_code returns raw inner lines as-is."""
+    from rlm_strudel.sanitizer import extract_section_code
+    raw = '  s("bd ~ ~ ~"),\n  s("hh*4").gain(0.3)'
+    result = extract_section_code(raw)
+    assert 's("bd ~ ~ ~")' in result, f"Expected raw lines preserved, got: {result}"
+    assert "stack(" not in result, f"Should not contain stack(), got: {result}"
+
+
+def test_extract_section_code_stack_wrapper():
+    """extract_section_code unwraps stack(...)."""
+    from rlm_strudel.sanitizer import extract_section_code
+    raw = 'stack(\n  s("bd ~ ~ ~"),\n  s("hh*4").gain(0.3)\n).cpm(82).play()'
+    result = extract_section_code(raw)
+    assert 's("bd ~ ~ ~")' in result, f"Expected inner code, got: {result}"
+    assert "stack(" not in result, f"Should not contain stack(), got: {result}"
+    assert ".play()" not in result, f"Should not contain .play(), got: {result}"
+    assert ".cpm(" not in result, f"Should not contain .cpm(), got: {result}"
+
+
+def test_extract_section_code_const_stack():
+    """extract_section_code unwraps const NAME = stack(...)."""
+    from rlm_strudel.sanitizer import extract_section_code
+    raw = 'const intro = stack(\n  s("bd ~ ~ ~"),\n  s("hh*4").gain(0.3)\n)'
+    result = extract_section_code(raw)
+    assert 's("bd ~ ~ ~")' in result, f"Expected inner code, got: {result}"
+    assert "const" not in result, f"Should not contain const, got: {result}"
+    assert "stack(" not in result, f"Should not contain stack(), got: {result}"
+
+
+def test_extract_section_code_arrange():
+    """extract_section_code extracts first stack() body from arrange() output."""
+    from rlm_strudel.sanitizer import extract_section_code
+    raw = '''const intro = stack(
+  s("bd ~ ~ ~"),
+  s("hh*4").gain(0.3)
+)
+
+const verse = stack(
+  s("bd ~ [~ bd] ~"),
+  s("~ sd ~ sd").gain(0.6)
+)
+
+arrange(
+  [4, intro],
+  [8, verse]
+).cpm(82).play()'''
+    result = extract_section_code(raw)
+    assert 's("bd ~ ~ ~")' in result, f"Expected first stack body, got: {result}"
+    assert "arrange(" not in result, f"Should not contain arrange(), got: {result}"
+
+
+def test_parse_sections_from_code():
+    """parse_sections_from_code extracts named sections from a full composition."""
+    from rlm_strudel.rlm_runner import parse_sections_from_code
+    code = '''const intro = stack(
+  s("bd ~ ~ ~"),
+  s("hh*4").gain(0.15)
+)
+
+const verse = stack(
+  s("bd ~ [~ bd] ~"),
+  s("~ sd ~ sd").gain(0.6),
+  note("<[c3,e3,g3]>").s("triangle").lpf(800).gain(0.5)
+)
+
+const chorus = stack(
+  s("bd ~ [~ bd] ~"),
+  s("~ sd ~ sd").gain(0.7),
+  s("hh*8").gain(0.2)
+)
+
+arrange(
+  [4, intro],
+  [8, verse],
+  [8, chorus]
+).cpm(82).play()'''
+    sections = parse_sections_from_code(code)
+    assert "intro" in sections, f"Missing 'intro', got keys: {list(sections.keys())}"
+    assert "verse" in sections, f"Missing 'verse', got keys: {list(sections.keys())}"
+    assert "chorus" in sections, f"Missing 'chorus', got keys: {list(sections.keys())}"
+    assert len(sections) == 3, f"Expected 3 sections, got {len(sections)}"
+    assert 's("bd ~ ~ ~")' in sections["intro"], f"Intro content wrong: {sections['intro']}"
+    assert "note(" in sections["verse"], f"Verse should contain note(): {sections['verse']}"
+
+
+def test_identify_flagged_sections():
+    """identify_flagged_sections extracts section names from revision text."""
+    from rlm_strudel.rlm_runner import identify_flagged_sections
+    revisions = [
+        "[chorus] open lpf from 400 to 1200",
+        "[verse] add syncopated kick",
+    ]
+    flagged = identify_flagged_sections(revisions)
+    assert "chorus" in flagged, f"Expected 'chorus' flagged, got: {flagged}"
+    assert "verse" in flagged, f"Expected 'verse' flagged, got: {flagged}"
+    assert "intro" not in flagged, f"'intro' should not be flagged, got: {flagged}"
+
+    # Empty revisions should default to verse+chorus
+    default = identify_flagged_sections([])
+    assert default == {"verse", "chorus"}, f"Expected default {{verse, chorus}}, got: {default}"
+
+
+def test_critic_slash5_reason_parsing():
+    """Critic parser handles /5 scores and strips markdown from reasons."""
+    from rlm_strudel.critic import parse_critic_output
+    evaluation = """
+**Harmony**: 4/5 — **good key consistency**
+**Rhythm**: 3/5 — *needs more syncopation*
+**Arrangement**: 4/5 — **decent structure**
+**Production**: 3/5 — *could use more polish*
+REVISIONS:
+- [chorus] add more energy to the filter sweep
+"""
+    result = parse_critic_output(evaluation)
+    # /5 scores should be doubled
+    assert result.harmony == 8, f"Expected harmony=8 (4*2), got {result.harmony}"
+    assert result.rhythm == 6, f"Expected rhythm=6 (3*2), got {result.rhythm}"
+    # Reasons should have markdown stripped
+    assert "**" not in result.reasons.get("harmony", ""), f"Reason still has markdown: {result.reasons}"
+    assert "*" not in result.reasons.get("rhythm", ""), f"Reason still has markdown: {result.reasons}"
+    assert len(result.revisions) >= 1, f"Expected revisions, got: {result.revisions}"
+
+
+def test_critic_with_revisions():
+    """Critic parser handles an evaluation with revision suggestions."""
+    from rlm_strudel.critic import parse_critic_output
+    evaluation = """
+HARMONY: 6/10 — layers clash in bridge
+RHYTHM: 5/10 — kick pattern too rigid
+ARRANGEMENT: 7/10 — good section contrast
+PRODUCTION: 6/10 — hats too loud
+REVISIONS:
+- [bridge] change chord voicing to avoid clash
+- [verse] add ghost kick on beat 3
+- [chorus] reduce hat gain from 0.4 to 0.2
+"""
+    result = parse_critic_output(evaluation)
+    assert result.harmony == 6
+    assert result.rhythm == 5
+    assert result.approved is False
+    assert len(result.revisions) == 3, f"Expected 3 revisions, got {len(result.revisions)}"
+
+
 if __name__ == "__main__":
-    print("\n=== Integration Tests: v2 Pipeline ===")
+    print("\n=== Integration Tests: v3 Pipeline ===")
     run_test("test_imports", test_imports)
     run_test("test_orchestrator_has_new_features", test_orchestrator_has_new_features)
     run_test("test_context_has_new_features", test_context_has_new_features)
     run_test("test_reference_pipeline", test_reference_pipeline)
     run_test("test_critic_pipeline", test_critic_pipeline)
     run_test("test_run_function_signature", test_run_function_signature)
+    run_test("test_extract_context_sections", test_extract_context_sections)
+    run_test("test_validate_semantic", test_validate_semantic)
+    run_test("test_orchestrator_no_explore_step", test_orchestrator_no_explore_step)
+    run_test("test_extract_section_code_raw_lines", test_extract_section_code_raw_lines)
+    run_test("test_extract_section_code_stack_wrapper", test_extract_section_code_stack_wrapper)
+    run_test("test_extract_section_code_const_stack", test_extract_section_code_const_stack)
+    run_test("test_extract_section_code_arrange", test_extract_section_code_arrange)
+    run_test("test_parse_sections_from_code", test_parse_sections_from_code)
+    run_test("test_identify_flagged_sections", test_identify_flagged_sections)
+    run_test("test_critic_slash5_reason_parsing", test_critic_slash5_reason_parsing)
+    run_test("test_critic_with_revisions", test_critic_with_revisions)
     print(f"\n{'='*40}")
     print(f"  {passed} passed, {failed} failed")
     if failed:
