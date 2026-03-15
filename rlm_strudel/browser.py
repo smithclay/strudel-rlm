@@ -111,14 +111,16 @@ class StrudelBrowser:
 
 
 class BrowserCallback(BaseCallback):
-    """DSPy callback that pushes RLM iterations to the browser timeline.
+    """DSPy callback that pushes RLM iterations to the browser timeline
+    and feeds the observability trace.
 
     Fires on on_module_end after each generate_action Predict call,
     identified by outputs having both 'reasoning' and 'code' attributes.
     """
 
-    def __init__(self, browser: StrudelBrowser):
+    def __init__(self, browser: StrudelBrowser, trace=None):
         self.browser = browser
+        self.trace = trace
         self._iteration = 0
 
     def on_module_end(self, call_id, outputs, exception=None):
@@ -128,3 +130,8 @@ class BrowserCallback(BaseCallback):
         if hasattr(outputs, "code") and hasattr(outputs, "reasoning"):
             self._iteration += 1
             self.browser.push_iteration(self._iteration, outputs.code, True, None)
+            if self.trace:
+                self.trace.add_iteration(
+                    self._iteration, outputs.code,
+                    reasoning=getattr(outputs, "reasoning", ""),
+                )

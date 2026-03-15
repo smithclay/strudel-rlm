@@ -111,11 +111,19 @@ class CriticResult:
 # Multiple regex patterns to handle different LLM output formats:
 # "HARMONY: 7/10 — reason", "**Harmony**: 7/10 - reason", "Harmony: 7 / 10 reason", "harmony - 7/10", etc.
 _SCORE_PATTERNS = [
-    # Standard: HARMONY: 7/10 — reason
+    # N/10 format: HARMONY: 7/10 — reason
     re.compile(r"\*{0,2}(harmony|harmonic[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*10(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
     re.compile(r"\*{0,2}(rhythm|rhythmic[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*10(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
     re.compile(r"\*{0,2}(arrangement|structure[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*10(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
     re.compile(r"\*{0,2}(production|mix[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*10(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
+]
+
+# N/5 format — scores get doubled to normalize to /10 scale
+_SCORE_PATTERNS_5 = [
+    re.compile(r"\*{0,2}(harmony|harmonic[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*5(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
+    re.compile(r"\*{0,2}(rhythm|rhythmic[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*5(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
+    re.compile(r"\*{0,2}(arrangement|structure[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*5(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
+    re.compile(r"\*{0,2}(production|mix[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*5(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
 ]
 
 # Map various dimension names to canonical keys
@@ -145,7 +153,7 @@ def parse_critic_output(text: str) -> CriticResult:
     scores: dict[str, int] = {}
     reasons: dict[str, str] = {}
 
-    # Try each pattern
+    # Try /10 patterns first
     for pattern in _SCORE_PATTERNS:
         for m in pattern.finditer(text):
             dim = _normalize_dim(m.group(1))
@@ -155,16 +163,32 @@ def parse_critic_output(text: str) -> CriticResult:
                 if reason:
                     reasons[dim] = reason
 
-    # Fallback: look for any "N/10" near dimension keywords
+    # Try /5 patterns if we're still missing scores
+    if len(scores) < 4:
+        for pattern in _SCORE_PATTERNS_5:
+            for m in pattern.finditer(text):
+                dim = _normalize_dim(m.group(1))
+                if dim and dim not in scores:
+                    scores[dim] = min(int(m.group(2)) * 2, 10)
+                    reason = (m.group(3) or "").strip().rstrip(".")
+                    if reason:
+                        reasons[dim] = reason
+
+    # Fallback: look for any "N/10" or "N/5" near dimension keywords
     if len(scores) < 4:
         for line in text.splitlines():
             line_lower = line.lower()
             for keyword, dim in _DIM_NORMALIZE.items():
                 if keyword in line_lower and dim not in scores:
+                    # Try N/10 first, then N/5 (scale up to /10)
                     num_match = re.search(r"(\d{1,2})\s*/\s*10", line)
                     if num_match:
                         scores[dim] = min(int(num_match.group(1)), 10)
-                        # Try to extract reason after the score
+                    else:
+                        num_match = re.search(r"(\d{1,2})\s*/\s*5", line)
+                        if num_match:
+                            scores[dim] = min(int(num_match.group(1)) * 2, 10)
+                    if num_match:
                         after = line[num_match.end():].strip().lstrip("-—: ").strip()
                         if after:
                             reasons[dim] = after.rstrip(".")

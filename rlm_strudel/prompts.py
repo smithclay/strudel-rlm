@@ -150,7 +150,7 @@ Synths (use with `note().s()`):
 - `sine` — pure tone, good for sub-bass and soft pads
 - `.detune(12)` — detune oscillator for richer/fatter sound (use with any synth)
 - `note("c3,e3,g3")` — comma-separated notes for simultaneous chords
-- `.arp("up")`, `.arp("down")`, `.arp("updown")` — arpeggiate chords
+- `.arp("up")`, `.arp("down")`, `.arp("updown")` — arpeggiate chords (ONLY these three modes exist)
 
 Bass samples (use with `note().s()`):
 - `jvbass` — punchy bass
@@ -176,6 +176,7 @@ FORBIDDEN — these will produce silence or errors with NO warning:
 - NO `.struct()` with numbers — use mini-notation: `s("bd(3,8)")` not `.struct("1(3,8)")`
 - NO `.chord()` — does not exist. Use comma-separated notes in note()
 - NO `Gibber` syntax, no `Drums()`, no `.amp` — this is Strudel, not Gibber
+- NO `.arp("pinkyup")` or other made-up arp modes — ONLY valid: `.arp("up")`, `.arp("down")`, `.arp("updown")`
 
 Want piano/keys? → `note("c3 e3 g3").s("triangle").lpf(1200)` or `.s("sawtooth").lpf(800)`
 Want organ? → `note("c3").s("square").lpf(800)`

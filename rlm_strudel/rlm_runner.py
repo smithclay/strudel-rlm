@@ -8,6 +8,7 @@ from rlm_strudel.interpreter import SingleInjectInterpreter
 from rlm_strudel.prompts import STRUDEL_CONTEXT
 from rlm_strudel.critic import StrudelCritic
 from rlm_strudel.references import select_references, format_references_for_prompt
+from rlm_strudel.library import RunTrace, save_run
 
 logger = logging.getLogger(__name__)
 
@@ -119,13 +120,19 @@ def run_strudel_rlm(
 ):
     logging.basicConfig(level=logging.INFO, format="%(name)s: %(message)s")
 
+    from datetime import datetime, timezone
+    trace = RunTrace(
+        query=query, model=model,
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
+
     lm = dspy.LM(model, cache=False)
 
     browser = StrudelBrowser(url=url)
     browser.start()
     print("[strudel] Browser ready")
 
-    callback = BrowserCallback(browser)
+    callback = BrowserCallback(browser, trace=trace)
     dspy.configure(lm=lm, callbacks=[callback])
 
     # Select relevant reference compositions for the query
@@ -196,6 +203,9 @@ def run_strudel_rlm(
             "approved": critique.approved,
         })
 
+        # Feed the trace
+        trace.add_critic_round(debate_round, critique, code)
+
         # Track best result
         if critique.average > best_score:
             best_score = critique.average
@@ -204,10 +214,20 @@ def run_strudel_rlm(
 
         if critique.approved:
             print(f"[strudel] Critic approved! (avg: {critique.average:.1f})")
+            trace.finalize(code, result.explanation, "approved")
+            saved = save_run(trace)
+            print(f"[strudel] Saved to {saved}")
             return result, browser
 
         print(f"[strudel] Critic wants revisions (avg: {critique.average:.1f}, min: {critique.min_score})")
 
     # Max rounds reached — return best attempt
     print(f"[strudel] Max debate rounds reached. Returning best attempt (avg: {best_score:.1f})")
+    trace.finalize(
+        best_result.strudel_code if best_result else "",
+        best_result.explanation if best_result else "",
+        "max_rounds",
+    )
+    saved = save_run(trace)
+    print(f"[strudel] Saved to {saved}")
     return best_result, browser
