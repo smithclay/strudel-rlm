@@ -34,6 +34,7 @@ initStrudel({
     };
 
     window.__analyser = analyser;
+    window.__streamDest = streamDest;
   }
 
   window.__strudelReady = true;
@@ -137,6 +138,86 @@ window.__getAudioAnalysis = async () => {
   } catch (e) {
     return { playing: false, rms: 0, error: e.message };
   }
+};
+
+// --- WAV Recording ---
+
+window.__startRecording = () => {
+  const streamDest = window.__streamDest;
+  if (!streamDest) return { success: false, error: 'No stream destination' };
+
+  const recorder = new MediaRecorder(streamDest.stream, { mimeType: 'audio/webm;codecs=opus' });
+  const chunks = [];
+  recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
+  recorder.start(100); // collect in 100ms chunks
+  window.__recorder = recorder;
+  window.__recordChunks = chunks;
+  return { success: true };
+};
+
+window.__stopRecording = async () => {
+  const recorder = window.__recorder;
+  if (!recorder || recorder.state === 'inactive') {
+    return { success: false, error: 'No active recording' };
+  }
+
+  return new Promise((resolve) => {
+    recorder.onstop = async () => {
+      const blob = new Blob(window.__recordChunks, { type: 'audio/webm' });
+
+      // Decode webm to raw PCM, then encode as WAV
+      const ctx = getAudioContext();
+      const arrayBuf = await blob.arrayBuffer();
+      const audioBuf = await ctx.decodeAudioData(arrayBuf);
+
+      // Encode WAV
+      const numChannels = audioBuf.numberOfChannels;
+      const sampleRate = audioBuf.sampleRate;
+      const length = audioBuf.length;
+      const bytesPerSample = 2; // 16-bit
+      const blockAlign = numChannels * bytesPerSample;
+      const dataSize = length * blockAlign;
+      const buffer = new ArrayBuffer(44 + dataSize);
+      const view = new DataView(buffer);
+
+      // WAV header
+      const writeStr = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+      writeStr(0, 'RIFF');
+      view.setUint32(4, 36 + dataSize, true);
+      writeStr(8, 'WAVE');
+      writeStr(12, 'fmt ');
+      view.setUint32(16, 16, true); // chunk size
+      view.setUint16(20, 1, true);  // PCM
+      view.setUint16(22, numChannels, true);
+      view.setUint32(24, sampleRate, true);
+      view.setUint32(28, sampleRate * blockAlign, true);
+      view.setUint16(32, blockAlign, true);
+      view.setUint16(34, 16, true); // bits per sample
+      writeStr(36, 'data');
+      view.setUint32(40, dataSize, true);
+
+      // Interleave channels and write PCM
+      let offset = 44;
+      for (let i = 0; i < length; i++) {
+        for (let ch = 0; ch < numChannels; ch++) {
+          const sample = Math.max(-1, Math.min(1, audioBuf.getChannelData(ch)[i]));
+          view.setInt16(offset, sample * 0x7FFF, true);
+          offset += 2;
+        }
+      }
+
+      // Convert to base64
+      const bytes = new Uint8Array(buffer);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
+
+      window.__recorder = null;
+      window.__recordChunks = null;
+      resolve({ success: true, base64, sampleRate, channels: numChannels, durationSec: length / sampleRate });
+    };
+    recorder.stop();
+  });
 };
 
 // --- Button handlers ---

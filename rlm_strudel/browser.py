@@ -1,5 +1,7 @@
 """Playwright browser management and DSPy callback for Strudel RLM."""
 
+import base64
+import os
 import time
 
 from playwright.sync_api import sync_playwright
@@ -98,6 +100,42 @@ class StrudelBrowser:
         time.sleep(1.0)
         analysis = self._page.evaluate("() => window.__getAudioAnalysis()")
         return analysis
+
+    def start_recording(self):
+        """Start recording audio output from the browser."""
+        if not self._page:
+            return
+        result = self._page.evaluate("() => window.__startRecording()")
+        if result.get("success"):
+            print("[browser] Recording started")
+        else:
+            print(f"[browser] Recording failed: {result.get('error')}")
+
+    def stop_recording(self, output_path: str) -> str | None:
+        """Stop recording and save WAV to output_path. Returns path or None."""
+        if not self._page:
+            return None
+        try:
+            # __stopRecording returns a Promise — Playwright auto-awaits it
+            # Use wait_for_function to allow enough time for WAV encoding
+            self._page.wait_for_function("true", timeout=2000)  # brief sync
+            result = self._page.evaluate("() => window.__stopRecording()")
+        except Exception as e:
+            print(f"[browser] Stop recording error: {e}")
+            return None
+        if not result or not result.get("success"):
+            print(f"[browser] Stop recording failed: {result.get('error') if result else 'no result'}")
+            return None
+
+        wav_bytes = base64.b64decode(result["base64"])
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "wb") as f:
+            f.write(wav_bytes)
+
+        duration = result.get("durationSec", 0)
+        size_kb = len(wav_bytes) / 1024
+        print(f"[browser] Saved {size_kb:.0f}KB WAV ({duration:.1f}s) to {output_path}")
+        return output_path
 
     def shutdown(self):
         if self._browser:

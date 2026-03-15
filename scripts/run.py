@@ -56,6 +56,8 @@ def main():
     parser.add_argument("--max-debate-rounds", type=int, default=3, help="Max composer/critic debate rounds (default: 3)")
     parser.add_argument("--no-server", action="store_true", help="Skip starting the static server (if already running)")
     parser.add_argument("--url", default="http://127.0.0.1:5173", help="Strudel app URL")
+    parser.add_argument("--record", type=int, default=0, metavar="SECONDS",
+                        help="Record N seconds of audio to WAV (0=disabled)")
     args = parser.parse_args()
 
     server = None
@@ -94,10 +96,23 @@ def main():
                 browser.signal_rlm_complete(code)
             except Exception as e:
                 print(f"[warn] signal_rlm_complete failed: {e}")
+            if args.record > 0:
+                browser.start_recording()
             try:
                 browser.play_in_browser(code)
             except Exception as e:
                 print(f"[warn] play_in_browser failed: {e}")
+            if args.record > 0:
+                print(f"\nRecording {args.record}s of audio...")
+                time.sleep(args.record)
+                # Find the library .js path to derive .wav path
+                import glob as g
+                js_files = sorted(g.glob(os.path.join(project_root, "library", "*.js")))
+                if js_files:
+                    wav_path = js_files[-1].replace(".js", ".wav")
+                else:
+                    wav_path = os.path.join(project_root, "library", "recording.wav")
+                browser.stop_recording(wav_path)
             try:
                 input("\nPress Enter to exit...")
             except EOFError:

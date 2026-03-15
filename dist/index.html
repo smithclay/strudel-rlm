@@ -180,6 +180,97 @@
   </footer>
 
 <script>
+// --- WAV Recording ---
+window.__initRecordingTap = function() {
+  // Create a MediaStreamDestination tapped from AudioContext.destination
+  // We monkey-patch connect() so anything routed to destination also goes to our tap
+  if (window.__streamDest) return;
+  var ctx = window.__audioContext || (window.AudioContext && new AudioContext());
+  // Try to find the Strudel audio context
+  if (!ctx) {
+    // Look for it via getAudioContext in the bundled code
+    try { ctx = document.querySelector('audio') && document.querySelector('audio').captureStream(); } catch(e) {}
+  }
+  return { ready: !!window.__streamDest };
+};
+
+window.__startRecording = function() {
+  // Lazy-init: create stream destination from existing AudioContext
+  if (!window.__streamDest) {
+    // The bundled JS patches AudioNode.connect and creates __analyser
+    // We need to create our own MediaStreamDestination from the same context
+    var analyser = window.__analyser;
+    if (analyser && analyser.context) {
+      var ctx = analyser.context;
+      var streamDest = ctx.createMediaStreamDestination();
+      // Connect the analyser output to our recording tap
+      analyser.connect(streamDest);
+      window.__streamDest = streamDest;
+    }
+  }
+  var streamDest = window.__streamDest;
+  if (!streamDest) return { success: false, error: 'No stream destination — audio not initialized' };
+  var recorder = new MediaRecorder(streamDest.stream, { mimeType: 'audio/webm;codecs=opus' });
+  var chunks = [];
+  recorder.ondataavailable = function(e) { if (e.data.size > 0) chunks.push(e.data); };
+  recorder.start(100);
+  window.__recorder = recorder;
+  window.__recordChunks = chunks;
+  return { success: true };
+};
+
+window.__stopRecording = function() {
+  var recorder = window.__recorder;
+  if (!recorder || recorder.state === 'inactive') {
+    return Promise.resolve({ success: false, error: 'No active recording' });
+  }
+  return new Promise(function(resolve) {
+    recorder.onstop = function() {
+      var blob = new Blob(window.__recordChunks, { type: 'audio/webm' });
+      var reader = new FileReader();
+      reader.onloadend = function() {
+        var arrayBuf = reader.result;
+        var audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        audioCtx.decodeAudioData(arrayBuf, function(audioBuf) {
+          var numCh = audioBuf.numberOfChannels;
+          var sr = audioBuf.sampleRate;
+          var len = audioBuf.length;
+          var bps = 2;
+          var blockAlign = numCh * bps;
+          var dataSize = len * blockAlign;
+          var buf = new ArrayBuffer(44 + dataSize);
+          var v = new DataView(buf);
+          function ws(off, s) { for (var i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); }
+          ws(0,'RIFF'); v.setUint32(4,36+dataSize,true); ws(8,'WAVE');
+          ws(12,'fmt '); v.setUint32(16,16,true); v.setUint16(20,1,true);
+          v.setUint16(22,numCh,true); v.setUint32(24,sr,true);
+          v.setUint32(28,sr*blockAlign,true); v.setUint16(32,blockAlign,true);
+          v.setUint16(34,16,true); ws(36,'data'); v.setUint32(40,dataSize,true);
+          var off = 44;
+          for (var i = 0; i < len; i++) {
+            for (var ch = 0; ch < numCh; ch++) {
+              var s = Math.max(-1, Math.min(1, audioBuf.getChannelData(ch)[i]));
+              v.setInt16(off, s * 0x7FFF, true);
+              off += 2;
+            }
+          }
+          var bytes = new Uint8Array(buf);
+          var bin = '';
+          for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+          var b64 = btoa(bin);
+          window.__recorder = null;
+          window.__recordChunks = null;
+          resolve({ success: true, base64: b64, sampleRate: sr, channels: numCh, durationSec: len / sr });
+        }, function(err) {
+          resolve({ success: false, error: 'Decode failed: ' + err });
+        });
+      };
+      reader.readAsArrayBuffer(blob);
+    };
+    recorder.stop();
+  });
+};
+
 window.__strudelPushCriticScores = function(data) {
   var panel = document.getElementById('critic-panel');
   var scoresEl = document.getElementById('critic-scores');
