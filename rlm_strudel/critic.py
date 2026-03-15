@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 
 import dspy
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Rubric
@@ -105,42 +108,77 @@ class CriticResult:
 # Parser
 # ---------------------------------------------------------------------------
 
-_SCORE_RE = re.compile(
-    r"(harmony|rhythm|arrangement|production)\s*:\s*(\d{1,2})\s*/\s*10(?:\s*[-—]\s*(.*))?",
-    re.IGNORECASE,
-)
+# Multiple regex patterns to handle different LLM output formats:
+# "HARMONY: 7/10 — reason", "**Harmony**: 7/10 - reason", "Harmony: 7 / 10 reason", "harmony - 7/10", etc.
+_SCORE_PATTERNS = [
+    # Standard: HARMONY: 7/10 — reason
+    re.compile(r"\*{0,2}(harmony|harmonic[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*10(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
+    re.compile(r"\*{0,2}(rhythm|rhythmic[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*10(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
+    re.compile(r"\*{0,2}(arrangement|structure[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*10(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
+    re.compile(r"\*{0,2}(production|mix[^\*:]*?)\*{0,2}\s*[:|-]\s*(\d{1,2})\s*/\s*10(?:\s*[-—:]\s*(.*))?", re.IGNORECASE),
+]
 
-_DIMENSION_MAP = {
-    "harmony": "harmony",
-    "rhythm": "rhythm",
-    "arrangement": "arrangement",
-    "production": "production",
+# Map various dimension names to canonical keys
+_DIM_NORMALIZE = {
+    "harmony": "harmony", "harmonic": "harmony", "harmonic coherence": "harmony",
+    "rhythm": "rhythm", "rhythmic": "rhythm", "rhythmic groove": "rhythm",
+    "arrangement": "arrangement", "structure": "arrangement", "arrangement & structure": "arrangement",
+    "production": "production", "mix": "production", "production quality": "production",
 }
 
 
+def _normalize_dim(raw: str) -> str | None:
+    """Normalize a dimension name to a canonical key."""
+    raw = raw.strip().lower().strip("*")
+    for prefix, canonical in _DIM_NORMALIZE.items():
+        if raw.startswith(prefix):
+            return canonical
+    return None
+
+
 def parse_critic_output(text: str) -> CriticResult:
-    """Parse the critic's textual output into a structured CriticResult."""
+    """Parse the critic's textual output into a structured CriticResult.
+
+    Tries multiple regex patterns and normalization strategies to handle
+    different LLM output formats (markdown bold, varied punctuation, etc.).
+    """
     scores: dict[str, int] = {}
     reasons: dict[str, str] = {}
 
-    for m in _SCORE_RE.finditer(text):
-        dim = _DIMENSION_MAP[m.group(1).lower()]
-        scores[dim] = int(m.group(2))
-        reason = (m.group(3) or "").strip()
-        if reason:
-            reasons[dim] = reason
+    # Try each pattern
+    for pattern in _SCORE_PATTERNS:
+        for m in pattern.finditer(text):
+            dim = _normalize_dim(m.group(1))
+            if dim and dim not in scores:
+                scores[dim] = min(int(m.group(2)), 10)
+                reason = (m.group(3) or "").strip().rstrip(".")
+                if reason:
+                    reasons[dim] = reason
+
+    # Fallback: look for any "N/10" near dimension keywords
+    if len(scores) < 4:
+        for line in text.splitlines():
+            line_lower = line.lower()
+            for keyword, dim in _DIM_NORMALIZE.items():
+                if keyword in line_lower and dim not in scores:
+                    num_match = re.search(r"(\d{1,2})\s*/\s*10", line)
+                    if num_match:
+                        scores[dim] = min(int(num_match.group(1)), 10)
+                        # Try to extract reason after the score
+                        after = line[num_match.end():].strip().lstrip("-—: ").strip()
+                        if after:
+                            reasons[dim] = after.rstrip(".")
 
     # Parse revisions
     revisions: list[str] = []
-    rev_match = re.search(r"REVISIONS?\s*:\s*(.*)", text, re.IGNORECASE | re.DOTALL)
+    rev_match = re.search(r"REVISIONS?\s*[:]\s*(.*)", text, re.IGNORECASE | re.DOTALL)
     if rev_match:
         rev_text = rev_match.group(1).strip()
-        # Check for "None" / approved
         if not re.match(r"none\b", rev_text, re.IGNORECASE):
             for line in rev_text.splitlines():
                 line = line.strip()
-                line = re.sub(r"^[-*]\s*", "", line).strip()
-                if line:
+                line = re.sub(r"^[-*•]\s*", "", line).strip()
+                if line and len(line) > 3 and not line.startswith("HARMONY") and not line.startswith("RHYTHM"):
                     revisions.append(line)
 
     return CriticResult(
@@ -166,4 +204,7 @@ class StrudelCritic:
 
     def evaluate(self, query: str, strudel_code: str) -> CriticResult:
         result = self.predict(query=query, strudel_code=strudel_code)
-        return parse_critic_output(result.evaluation)
+        logger.info(f"[critic raw output] {result.evaluation[:500]}")
+        parsed = parse_critic_output(result.evaluation)
+        logger.info(f"[critic parsed] {parsed}")
+        return parsed

@@ -47,10 +47,12 @@ IMPORTANT RULES:
 - Synths (as strings in .s()): "sawtooth", "square", "triangle", "sine"
 - Technique: .detune(N) for fat pads, note("c3,e3,g3") for chords, .arp("up") for arpeggios
 - NEVER use .bank() — it will silently fail
-- NEVER use .distort() — use .shape(0-1) instead
-- NEVER use .res() — use .resonance(0-40) instead
-- NEVER use pattern(), perlin, or patterns.* — they don't exist
-- NEVER use .euclid() as a method — use mini-notation: s("bd(3,8)") not s("bd").euclid(3,8)
+- NEVER use .distort(), .res(), .lpq(), .fadeOut(), .fadeIn(), .adsr(), .perc(), .chord() — they don't exist
+- NEVER use pattern(), perlin, patterns.*, sine.range(), saw() — they don't exist
+- NEVER use chord shorthand like note("c3'7") — use comma-separated: note("c3,e3,g3,bb3")
+- Use .resonance(0-40) for filter resonance, .shape(0-1) for distortion
+- Use separate .attack(), .decay(), .sustain(), .release() — NOT .adsr()
+- Use mini-notation for Euclidean: s("bd(3,8)") — NOT .euclid()
 - Use .cpm(N) for tempo, NOT setbpm
 - Sections should CONTRAST: intro=sparse, verse=medium, chorus=full energy, outro=wind down"""
 

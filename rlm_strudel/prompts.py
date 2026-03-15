@@ -163,11 +163,19 @@ FORBIDDEN — these will produce silence or errors with NO warning:
 - NO bare `sawtooth`/`square`/`triangle`/`sine` as JS variables — always use them as strings: `.s("sawtooth")`
 - NO `.distort()` — does not exist. Use `.shape(0-1)` for distortion
 - NO `.res()` — does not exist. Use `.resonance(0-40)` instead
+- NO `.lpq()` — does not exist. Use `.resonance(0-40)` instead
 - NO `pattern()` function — does not exist. Use mini-notation strings instead
 - NO `perlin` — does not exist. Use `.every()` or `.sometimes()` for variation
 - NO `patterns.sine` or `patterns.*` — does not exist. Use `.slow()` and `.fast()` for movement
+- NO `sine.range()` or `saw()` — does not exist as standalone. Use `.slow()` for movement
 - NO `.euclid()` as a method — use mini-notation: `s("bd(3,8)")` not `s("bd").euclid(3,8)`
 - NO `.perc()` — does not exist. Use `.decay()` and `.sustain(0)` instead
+- NO `.fadeOut()` or `.fadeIn()` — does not exist
+- NO `.adsr()` — does not exist. Use separate `.attack()`, `.decay()`, `.sustain()`, `.release()`
+- NO `'7` or `'maj7` or `'m9` chord shorthand in note() — use comma-separated notes: `note("c3,e3,g3,bb3")` not `note("c3'7")`
+- NO `.struct()` with numbers — use mini-notation: `s("bd(3,8)")` not `.struct("1(3,8)")`
+- NO `.chord()` — does not exist. Use comma-separated notes in note()
+- NO `Gibber` syntax, no `Drums()`, no `.amp` — this is Strudel, not Gibber
 
 Want piano/keys? → `note("c3 e3 g3").s("triangle").lpf(1200)` or `.s("sawtooth").lpf(800)`
 Want organ? → `note("c3").s("square").lpf(800)`
