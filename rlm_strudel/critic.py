@@ -17,32 +17,64 @@ logger = logging.getLogger(__name__)
 CRITIC_RUBRIC = """\
 You are a music critic evaluating Strudel live-coding compositions.
 
-Score on 4 dimensions (1-10). You MUST use EXACTLY this output format:
+## Output format (MANDATORY — no preamble, start immediately with scores)
 
-HARMONY: 7/10 — all layers in C minor, bass supports roots
-RHYTHM: 6/10 — groove is stiff, needs syncopation
-ARRANGEMENT: 8/10 — good use of arrange() with contrasting sections
-PRODUCTION: 7/10 — balanced mix, reverb serves the mood
+HARMONY: 7/10 — [cite specific code] reason
+RHYTHM: 6/10 — [cite specific code] reason
+ARRANGEMENT: 8/10 — [cite specific code] reason
+PRODUCTION: 7/10 — [cite specific code] reason
 REVISIONS:
-- [chorus] open lpf from 400→1200 on the sawtooth chord layer for more energy
-- [verse] add syncopated kick: change "bd ~ ~ ~" to "bd ~ [~ bd] ~"
+- [section] specific fix with values
 
-Scoring guide:
-- HARMONY: key consistency, chord logic, bass support. 1-3=clashing, 4-6=mostly ok, 7-9=solid, 10=beautiful
-- RHYTHM: genre-appropriate groove, syncopation, interlocking layers. 1-3=broken, 4-6=stiff, 7-9=groovy, 10=infectious
-- ARRANGEMENT: uses arrange() with sections? contrast? tension/release? 1-3=one loop, 4-6=some variation, 7-9=clear sections, 10=compelling journey
-- PRODUCTION: gain balance, effects serve music, frequency spread. 1-3=muddy, 4-6=basic, 7-9=polished, 10=professional
+## Scoring rubric — cite evidence from the code for EVERY score
 
-REVISION RULES — for each dimension scoring below 7:
-- Reference the specific section (intro/verse/chorus/bridge/outro) and layer (kick, snare, bass, chord, lead, etc.) that needs work.
-- Suggest a concrete fix with actual values (e.g., "change lpf(400) to lpf(1200)", "add .delay(0.3)").
-- Do NOT give vague feedback like "add more energy" — say WHERE and HOW.
+HARMONY (key consistency, chord logic, bass support):
+- 3/10: notes clash, no key center, bass contradicts chords
+- 5/10: mostly in key but some clashing notes, bass sometimes wrong
+- 7/10: consistent key, logical progression, bass follows roots
+- 9/10: rich voicings (7ths/9ths), voice leading, chromatic color
 
-If all scores >= 7, write: REVISIONS: None — composition approved.
+RHYTHM (genre groove, syncopation, drum interplay):
+- 3/10: patterns don't align, wrong feel for genre
+- 5/10: basic on-beat patterns, no swing or ghost notes
+- 7/10: genre-appropriate groove, some syncopation, layers interlock
+- 9/10: infectious groove, varied hi-hat patterns, ghost notes, swing
 
-IMPORTANT: Start your response with the four score lines. Do not add preamble.
+ARRANGEMENT (structure checklist — score based on how many are met):
+Count these concrete criteria:
+  A. Uses arrange() with named const sections? (+2 points, starting from base 3)
+  B. Has >= 3 distinct sections (intro/verse/chorus/outro)? (+1)
+  C. Sections differ in layer count (intro sparse, chorus full)? (+1)
+  D. Filter/effect values change between sections (e.g. lpf opens up)? (+1)
+  E. Has intro that is sparser than verse? (+1)
+  F. Has outro that winds down from chorus? (+1)
+Base score is 3. Add points for each criterion met. Cap at 10.
+Example: arrange() ✓(+2=5), 4 sections ✓(+1=6), layer contrast ✓(+1=7), filter contrast ✓(+1=8), sparse intro ✓(+1=9), outro winds down ✓(+1=10) → ARRANGEMENT: 10/10
 
-CRITICAL: Use a 1-10 scale. Write "7/10" NOT "3.5/5" or "4/5". Each line: DIMENSION: N/10 — reason
+PRODUCTION (mix balance, effects serve music, frequency spread):
+- 3/10: all layers same gain, no effects, muddy
+- 5/10: some gain variation, basic lpf, one effect
+- 7/10: balanced gains, lpf+room+delay, effects match genre
+- 9/10: layered effects, frequency separation, crush/shape for texture
+
+## Revision rules — for each dimension below 7:
+- Name the specific section and layer
+- Give a concrete fix with actual values (e.g. "change lpf(400) to lpf(1200)")
+- Do NOT give vague feedback
+
+If all scores >= 7: REVISIONS: None — composition approved.
+
+## Example evaluation (study this for calibration)
+
+HARMONY: 8/10 — I-vi-IV-V in C major with 7th chords in chorus "[c3,e3,g3,b3]", bass follows roots "<c2 a1 f1 g1>"
+RHYTHM: 7/10 — boom-bap kick "bd ~ [~ bd] ~" with ghost note, snare on 2&4, but hi-hats "hh*8" are mechanical
+ARRANGEMENT: 9/10 — arrange() with 4 const sections, intro has 3 layers vs chorus has 6, lpf opens 600→1200, outro strips to pad+kick
+PRODUCTION: 7/10 — gains balanced (0.15-0.7 range), room(0.4) and delay(0.2) add space, but no crush or shape for lo-fi texture
+REVISIONS:
+- [verse] hi-hats too mechanical: change "hh*8" to "[hh hh] [hh hh] [hh hh] [hh ~]" for shuffle
+- [chorus] add .crush(12) on chord pad for lo-fi character
+
+CRITICAL: Use 1-10 scale. Write "7/10" NOT "3.5/5". Cite code evidence for every score.
 """
 
 # ---------------------------------------------------------------------------
@@ -146,9 +178,16 @@ _SCORE_PATTERNS_5 = [
 # Map various dimension names to canonical keys
 _DIM_NORMALIZE = {
     "harmony": "harmony", "harmonic": "harmony", "harmonic coherence": "harmony",
+    "harmonic quality": "harmony", "harmonic dimension": "harmony",
+    "melodic": "harmony", "harmonic & melodic": "harmony",
     "rhythm": "rhythm", "rhythmic": "rhythm", "rhythmic groove": "rhythm",
+    "rhythmic quality": "rhythm", "rhythmic dimension": "rhythm",
+    "rhythmic programming": "rhythm", "beat": "rhythm",
     "arrangement": "arrangement", "structure": "arrangement", "arrangement & structure": "arrangement",
+    "structural": "arrangement", "structural quality": "arrangement",
+    "arrangement dimension": "arrangement",
     "production": "production", "mix": "production", "production quality": "production",
+    "production dimension": "production", "sound design": "production",
 }
 
 
@@ -218,6 +257,27 @@ def parse_critic_output(text: str) -> CriticResult:
                         if after:
                             reasons[dim] = after.rstrip(".")
 
+    # Last resort: bare number after dimension keyword (e.g. "**Harmonic Quality:** 4.")
+    if len(scores) < 4:
+        for line in text.splitlines():
+            line_lower = line.lower()
+            for keyword, dim in _DIM_NORMALIZE.items():
+                if keyword in line_lower and dim not in scores:
+                    # Match "keyword:** N." or "keyword: N." or "keyword - N."
+                    bare_match = re.search(
+                        r"(?:{})\s*(?:\*{{0,2}})\s*[:|-]\s*(\d{{1,2}})(?:\s*\.|[,\s])".format(re.escape(keyword)),
+                        line_lower,
+                    )
+                    if bare_match:
+                        raw = int(bare_match.group(1))
+                        # If score is 1-5, assume /5 scale and double
+                        if raw <= 5:
+                            scores[dim] = min(raw * 2, 10)
+                            logger.warning(f"[critic] bare-number fallback: {dim}={raw} → {scores[dim]}/10 (assumed /5)")
+                        else:
+                            scores[dim] = min(raw, 10)
+                            logger.warning(f"[critic] bare-number fallback: {dim}={raw}/10")
+
     # Parse revisions
     revisions: list[str] = []
     rev_match = re.search(r"REVISIONS?\s*[:]\s*(.*)", text, re.IGNORECASE | re.DOTALL)
@@ -277,7 +337,9 @@ class StrudelCritic:
         self.predict = dspy.Predict(CriticSignature, instructions=CRITIC_RUBRIC)
 
     def evaluate(self, query: str, strudel_code: str) -> CriticResult:
-        result = self.predict(query=query, strudel_code=strudel_code)
+        # Use low temperature for consistent scoring (LLM-as-judge best practice)
+        with dspy.context(lm=dspy.settings.lm.copy(temperature=0.0)):
+            result = self.predict(query=query, strudel_code=strudel_code)
         logger.info(f"[critic raw output] {result.evaluation[:500]}")
         parsed = parse_critic_output(result.evaluation)
         logger.info(f"[critic parsed] {parsed}")

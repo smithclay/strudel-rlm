@@ -29,33 +29,39 @@ Variables (pre-organized — use directly, no slicing needed):
 - `query`: The user's musical request
 
 Functions:
-- `compose_section(prompt, previous_code="")` → str: Generate Strudel code via sub-agent. The FORBIDDEN list and available sounds are automatically included. Returns sanitized code. Pass previous_code when revising an existing section. Use this instead of llm_query().
+- `compose_section(prompt, previous_code="")` → str: Generate Strudel code via sub-agent. Returns the inner lines for stack(). Pass previous_code when revising.
 - `validate_code(code)` → str: Validate Strudel code in the browser. Returns "Valid!" or "[Error] ...".
 - `print(...)`: Inspect variables and results.
-- `SUBMIT(strudel_code, explanation)`: Submit final composition.
+- `SUBMIT(strudel_code=..., explanation=...)`: Submit final composition. MUST use keyword arguments.
 
 You are producing: {output_fields}
 
-Workflow — 3 steps only:
-1. COMPOSE: Use compose_section() to generate each section (intro, verse, chorus, outro) as `const` variables using `stack()`. Include genre/effects context in your prompt. Example:
-   ```python
-   intro_code = compose_section("Write a sparse intro section for a lo-fi hip hop track at cpm(82). Use bd, hh, and a triangle chord pad. 4 layers max.")
-   print(intro_code)
-   ```
-2. VALIDATE: Use validate_code() on each section and the final arranged result. Fix errors inline.
-3. SUBMIT: Assemble sections with arrange(), validate, and call SUBMIT(code, explanation).
+## Workflow — compose, assemble, submit
 
-Example iteration pattern:
+IMPORTANT: Call compose_section() EXACTLY ONCE per iteration. Multiple calls in one code block cause duplicate/corrupted output. One section per iteration, no exceptions.
+
+### Iteration 1: Intro
 ```python
-# Iteration 1: Generate all sections
 intro = compose_section("Sparse intro: kick + hi-hat + soft pad. Lo-fi hip hop at cpm(82).")
-verse = compose_section("Verse: add snare, bass, fuller chords. Lo-fi hip hop at cpm(82).")
-chorus = compose_section("Chorus: full energy, all layers, brighter filters. Lo-fi hip hop at cpm(82).")
-outro = compose_section("Outro: strip back to kick + pad, more reverb. Lo-fi hip hop at cpm(82).")
-print("Generated all sections")
+print(intro)
 ```
+### Iteration 2: Verse
 ```python
-# Iteration 2: Assemble and validate
+verse = compose_section("Verse: add snare, bass, fuller chords. Lo-fi hip hop at cpm(82).")
+print(verse)
+```
+### Iteration 3: Chorus
+```python
+chorus = compose_section("Chorus: full energy, all layers, brighter filters. Lo-fi hip hop at cpm(82).")
+print(chorus)
+```
+### Iteration 4: Outro
+```python
+outro = compose_section("Outro: strip back to kick + pad, more reverb. Lo-fi hip hop at cpm(82).")
+print(outro)
+```
+### Iteration 5: Assemble, validate, and submit
+```python
 full_code = f\"\"\"const intro = stack(
 {{intro}}
 )
@@ -80,36 +86,49 @@ arrange(
   [8, chorus],
   [4, outro]
 ).cpm(82).play()\"\"\"
+
 result = validate_code(full_code)
 print(result)
-```
-```python
-# Iteration 3: Submit if valid
-SUBMIT(full_code, "Lo-fi hip hop composition with 4 contrasting sections")
+if result == "Valid!":
+    SUBMIT(strudel_code=full_code, explanation="Lo-fi hip hop composition with 4 contrasting sections")
 ```
 
-REVISION MODE:
-If `query` contains '## Critic Feedback', you are in revision mode. Read the previous code and the critic's specific feedback. Only regenerate sections the critic flagged. Keep sections that scored well.
+## FALLBACK — if compose_section or validate_code are not available
 
-Example revision workflow:
+If you get a NameError for compose_section or validate_code, write Strudel code DIRECTLY using the `genres`, `effects`, and `examples` variables as templates. Do NOT waste iterations retrying broken functions.
+
 ```python
-# The critic flagged the chorus and verse. Keep intro and outro as-is.
-# Previous intro code is fine — reuse it directly.
-old_intro = "s(\"bd ~ ~ ~\"),\\n  s(\"hh*4\").gain(0.2)"
-
-# Regenerate only flagged sections with specific fixes
-new_chorus = compose_section(
-    "Fix the chorus for a lo-fi hip hop track at cpm(82). "
-    "Open the lpf from 400 to 1200 on the chord layer for more energy. "
-    "Add a clap on beat 4.",
-    previous_code="s(\"bd ~ [~ bd] ~\"),\\n  s(\"~ sd ~ sd\").gain(0.7),\\n  note(\"...\").s(\"triangle\").lpf(400).gain(0.5)"
+# FALLBACK: Write Strudel code directly from reference material
+full_code = \"\"\"const intro = stack(
+  s("bd ~ ~ ~"),
+  s("hh*4").gain(0.15),
+  note("<[c3,e3,g3] [a2,c3,e3]>").s("triangle").lpf(600).room(0.5).gain(0.3)
 )
-print(new_chorus)
+...
+arrange([4, intro], [8, verse], [8, chorus], [4, outro]).cpm(82).play()\"\"\"
+
+SUBMIT(strudel_code=full_code, explanation="Lo-fi hip hop track")
 ```
+
+## SUBMIT — exact calling convention
+
+SUBMIT uses KEYWORD arguments matching the output field names. Always call it like this:
+```python
+SUBMIT(strudel_code=my_code_variable, explanation="Description of the composition")
+```
+NEVER call SUBMIT(code, "explanation") with positional args — this will fail.
+
+## REVISION MODE
+
+If `query` contains '## Revision Mode', you are revising a previous attempt.
+- Sections marked KEEP: copy them exactly into your new composition
+- Sections marked for regeneration: use compose_section() or write directly
+- Apply the critic's specific feedback
 
 IMPORTANT RULES:
 - Do NOT use print() to explore context — it's already organized for you
-- Do NOT use llm_query() — use compose_section() instead (it includes forbidden list automatically)
+- Do NOT use llm_query() — use compose_section() instead
+- If compose_section() fails with NameError, write code directly (see FALLBACK above)
 - Always end Strudel code with .play()
 - Use stack() to layer patterns, arrange() to sequence sections
 - Use `const` to name each section before arrange()
@@ -348,8 +367,8 @@ def run_strudel_rlm(
             browser.shutdown()
             raise
 
-        code = result.strudel_code
-        if not code:
+        code = result.strudel_code if result else None
+        if not code or not isinstance(code, str):
             print("[strudel] No code generated, skipping critic")
             continue
 
