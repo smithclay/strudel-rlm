@@ -9,6 +9,7 @@ from rlm_strudel.prompts import STRUDEL_CONTEXT
 from rlm_strudel.critic import StrudelCritic
 from rlm_strudel.references import select_references, format_references_for_prompt
 from rlm_strudel.library import RunTrace, save_run
+from rlm_strudel.sanitizer import sanitize_strudel
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,18 @@ def run_strudel_rlm(
         if not code:
             print("[strudel] No code generated, skipping critic")
             continue
+
+        # Sanitize — strip markdown, forbidden functions, stray .play() calls
+        raw_len = len(code)
+        code = sanitize_strudel(code)
+        if len(code) != raw_len:
+            logger.info(f"[sanitizer] Cleaned {raw_len - len(code)} chars of junk")
+        result.strudel_code = code
+
+        # Re-validate after sanitization
+        validation = browser.validate_code(code)
+        if validation != "Valid!":
+            logger.warning(f"[sanitizer] Post-sanitize validation failed: {validation}")
 
         # Critic evaluation
         print("[strudel] Critic evaluating...")
