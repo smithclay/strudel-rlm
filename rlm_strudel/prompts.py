@@ -1,5 +1,60 @@
 """Strudel API reference context — the variable space for the RLM to slice."""
 
+import re
+
+
+def extract_context_sections(context: str) -> dict[str, str]:
+    """Extract named sections from STRUDEL_CONTEXT for pre-organized sandbox injection.
+
+    Returns dict with keys: sounds, forbidden, effects, examples, api, genres.
+    """
+    sections = {}
+
+    # Available Sounds section
+    m = re.search(
+        r"(## Available Sounds.*?)(?=\n## |\Z)",
+        context, re.DOTALL,
+    )
+    sections["sounds"] = m.group(1).strip() if m else ""
+
+    # FORBIDDEN list
+    m = re.search(
+        r"(FORBIDDEN — .*?)(?=\nWant |\n## |\Z)",
+        context, re.DOTALL,
+    )
+    sections["forbidden"] = m.group(1).strip() if m else ""
+
+    # Effects Recipes
+    m = re.search(
+        r"(## Effects Recipes.*?)(?=\n## Composition|\Z)",
+        context, re.DOTALL,
+    )
+    sections["effects"] = m.group(1).strip() if m else ""
+
+    # Genre Pattern Library
+    m = re.search(
+        r"(## Genre Pattern Library.*?)(?=\n## Rhythm Templates|\Z)",
+        context, re.DOTALL,
+    )
+    sections["genres"] = m.group(1).strip() if m else ""
+
+    # Core Functions + Pattern Transforms + Combining + Song Structure
+    m = re.search(
+        r"(## Core Functions.*?)(?=\n## Available Sounds|\Z)",
+        context, re.DOTALL,
+    )
+    sections["api"] = m.group(1).strip() if m else ""
+
+    # Examples section
+    m = re.search(
+        r"(## Examples.*?)(?=\Z)",
+        context, re.DOTALL,
+    )
+    sections["examples"] = m.group(1).strip() if m else ""
+
+    return sections
+
+
 STRUDEL_CONTEXT = """
 # Strudel Live Coding Reference
 
@@ -132,14 +187,13 @@ Drum samples (use with `s()`):
 - `bd` — kick drum
 - `sd` — snare drum
 - `hh` — closed hi-hat
-- `oh` — open hi-hat
+- `808oh` — open hi-hat (NOT `oh` — that doesn't exist)
+- `rm` — rimshot (NOT `rim` — that doesn't exist)
 - `lt` — low tom
 - `mt` — mid tom
 - `ht` — high tom
 - `cp` — clap
-- `rim` — rimshot
 - `cr` — crash cymbal
-- `rd` — ride cymbal
 - `cb` — cowbell
 - `noise` — noise hit
 
@@ -159,6 +213,9 @@ Bass samples (use with `note().s()`):
 
 FORBIDDEN — these will produce silence or errors with NO warning:
 - NO `.bank()` calls (e.g. `.bank("ve_bk")`) — banks are not loaded
+- NO `oh` — does not exist. Use `808oh` for open hi-hat
+- NO `rim` — does not exist. Use `rm` for rimshot
+- NO `rd` — ride cymbal causes errors. Use `hh` or `cb` instead
 - NO sample names besides those listed above (no piano, rhodes, organ, epiano, gretsch, kick, snare, bass, superdrums, etc.)
 - NO bare `sawtooth`/`square`/`triangle`/`sine` as JS variables — always use them as strings: `.s("sawtooth")`
 - NO `.distort()` — does not exist. Use `.shape(0-1)` for distortion
@@ -453,6 +510,36 @@ Bitcrushed square wave for 8-bit sounds.
 .lpf(400).room(0.6).gain(0.4)
 ```
 Heavy low-pass for submerged, distant sounds.
+
+## Audio Quality Guidelines — Evidence-Based Mix Rules
+
+These rules are derived from scoring hundreds of compositions with an audio quality model.
+The highest-scoring compositions share these traits:
+
+### Fewer, Louder Layers (most important)
+- 5-7 layers per section is the sweet spot. 9+ layers with low gains compete and mud.
+- Every layer should be clearly audible. If you can't hear it, remove it.
+- Bass: gain 0.7–0.8. Chords: gain 0.4–0.6. Hi-hats: gain 0.2–0.35. Melody: gain 0.3–0.4.
+- NEVER use gain below 0.15 — inaudible elements waste energy.
+
+### Mid-Range Presence (the money zone)
+- Chords/pads: lpf 700–1200 Hz. This is warm and present.
+- lpf 400-600 on chords = muffled. lpf 2000+ on chords = harsh.
+- Bass: sawtooth with lpf(300-400) sounds fuller than sine with lpf(150).
+  Sawtooth bass has overtones that translate on all speakers.
+- Lead melody: lpf 1200-1500 sits nicely above the chords.
+
+### Delay as the Primary Effect
+- `.delay(0.4).delaytime(0.188).delayfeedback(0.6)` creates depth and space.
+- One good delay on 2-3 layers is more effective than .room()+.delay()+.pan()+.detune()
+  on every layer. Effects that compete cancel each other out.
+- `.room(0.3-0.5)` on 1-2 layers is fine. Don't put room on everything.
+
+### Verse-Chorus Repetition
+- Structure: `[4,intro] [8,verse] [8,chorus] [8,verse] [8,chorus] [4,outro]`
+- Hearing the same verse and chorus twice creates musical coherence.
+- The listener's brain rewards familiarity — repeating good material > unique sections.
+- This also means less unique material to compose — quality over quantity.
 
 ## Composition Strategies
 

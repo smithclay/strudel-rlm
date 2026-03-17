@@ -90,7 +90,7 @@ arrange(
 result = validate_code(full_code)
 print(result)
 if result == "Valid!":
-    SUBMIT(strudel_code=full_code, explanation="Lo-fi hip hop composition with 4 contrasting sections")
+    SUBMIT(strudel_code=full_code, explanation="Lo-fi hip hop with verse-chorus-verse-chorus structure")
 ```
 
 ## FALLBACK — if compose_section or validate_code are not available
@@ -105,7 +105,7 @@ full_code = \"\"\"const intro = stack(
   note("<[c3,e3,g3] [a2,c3,e3]>").s("triangle").lpf(600).room(0.5).gain(0.3)
 )
 ...
-arrange([4, intro], [8, verse], [8, chorus], [4, outro]).cpm(82).play()\"\"\"
+arrange([8, intro], [24, chorus], [8, outro]).cpm(82).play()\"\"\"
 
 SUBMIT(strudel_code=full_code, explanation="Lo-fi hip hop track")
 ```
@@ -132,7 +132,10 @@ IMPORTANT RULES:
 - Always end Strudel code with .play()
 - Use stack() to layer patterns, arrange() to sequence sections
 - Use `const` to name each section before arrange()
-- Sections should CONTRAST: intro=sparse, verse=medium, chorus=full energy, outro=wind down"""
+- Use verse-chorus repetition: [4,intro] [8,verse] [8,chorus] [8,verse] [8,chorus] [4,outro]
+- Repeating the same verse and chorus gives musical coherence — the listener hears familiar material
+- Sections should CONTRAST: intro=sparse, verse=medium, chorus=full energy, outro=wind down
+- MIX: bass gain 0.7-0.8, chords 0.4-0.6, hats 0.2-0.35. Chords lpf 700-1200 (warm, not muffled)."""
 
 
 def parse_sections_from_code(code: str) -> dict[str, str]:
@@ -289,6 +292,16 @@ def run_strudel_rlm(
             )
         enriched_prompt += (
             f"TASK: {prompt}\n\n"
+            f"MIX PRIORITIES:\n"
+            f"- FEWER, LOUDER layers (5-7 per section). Don't spread gain thin across 9+ layers.\n"
+            f"- MID-RANGE PRESENCE: chords/pads at lpf 700-1200 (not 400, not 2000+). The mid-range\n"
+            f"  carries the musical content — keep it warm and present, not muffled or harsh.\n"
+            f"- BASS WITH HARMONICS: prefer sawtooth lpf(300-400) over sine lpf(150) for bass —\n"
+            f"  sawtooth has overtones that translate on all speakers.\n"
+            f"- DELAY AS PRODUCTION: .delay() with .delayfeedback(0.5-0.7) creates space and depth.\n"
+            f"  This alone is more effective than piling on .room()+.delay()+.pan()+.detune() everywhere.\n"
+            f"- GAIN HIERARCHY: bass 0.7-0.8, chords 0.4-0.6, hats 0.2-0.35, melody 0.3-0.4.\n"
+            f"  Every element should be clearly audible at its intended level.\n\n"
             f"Return ONLY the Strudel code lines (the contents inside stack()), no markdown, no explanation."
         )
         # Use dspy's built-in llm_query via a simple LM call
@@ -312,6 +325,13 @@ def run_strudel_rlm(
         violations = validate_semantic(result)
         if violations:
             logger.warning(f"[compose_section] Semantic violations in sub-agent output: {violations}")
+
+        # Warn if section lacks high-frequency content (all layers have lpf < 2000)
+        lpf_values = [int(m.group(1)) for m in re.finditer(r'\.lpf\((\d+)\)', result)]
+        has_hh = bool(re.search(r's\(".*?hh', result))
+        if lpf_values and max(lpf_values) < 2000 and not has_hh:
+            logger.warning(f"[compose_section] All layers filtered below 2kHz — mix may sound muffled")
+
         return result
 
     critic = StrudelCritic()

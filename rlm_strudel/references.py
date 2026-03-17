@@ -17,8 +17,8 @@ stack(
   s("~ sd ~ sd").gain(0.6),
   s("[hh hh] [hh hh] [hh hh] [hh ~]").gain(0.25),
   note("<[c3,e3,g3] [a2,c3,e3] [f2,a2,c3] [g2,b2,d3]>")
-    .s("triangle").lpf(800).room(0.4).delay(0.2).gain(0.5),
-  note("<c2 c2 f2 g2>").s("sine").lpf(200).gain(0.6)
+    .s("triangle").detune(12).lpf(1200).room(0.4).delay(0.2).gain(0.6),
+  note("<c2 c2 f2 g2>").s("sine").lpf(200).gain(0.7)
 ).cpm(82).play()""",
         "annotation": (
             "Classic lo-fi hip hop beat. Lazy swing kick with ghost note, "
@@ -38,12 +38,12 @@ stack(
   s("~ ~ ~ ~ ~ ~ sd ~").room(0.5).gain(0.5),
   s("hh*4").gain(0.15).lpf(600),
   note("<[c2,eb2,g2] [bb1,d2,f2] [ab1,c2,eb2] [g1,bb1,d2]>")
-    .s("sawtooth").lpf(500).resonance(15).shape(0.4)
-    .room(0.6).size(0.8).gain(0.5),
-  note("c1").s("sine").lpf(100).gain(0.7),
+    .s("sawtooth").detune(12).lpf(800).resonance(15).shape(0.4)
+    .room(0.6).size(0.8).gain(0.6),
+  note("c1").s("sine").lpf(100).gain(0.8),
   note("c4 ~ eb4 ~ g4 ~ f4 ~").s("sawtooth")
-    .lpf(1200).delay(0.4).delaytime(0.25).delayfeedback(0.5)
-    .gain(0.2)
+    .lpf(1500).delay(0.4).delaytime(0.25).delayfeedback(0.5)
+    .room(0.3).gain(0.35)
 ).cpm(65).play()""",
         "annotation": (
             "Dark cinematic atmosphere. Minor chords with sawtooth waveshaping "
@@ -62,7 +62,7 @@ stack(
   s("bd bd bd bd"),
   s("~ cp ~ cp").gain(0.6),
   s("hh*8").gain(0.3),
-  s("~ ~ ~ ~ ~ ~ [oh ~] ~").gain(0.4),
+  s("~ ~ ~ ~ ~ ~ [808oh ~] ~").gain(0.4),
   note("c1 ~ c1 ~").s("sine").lpf(200).gain(0.9),
   note("c3 ~ ~ c3 ~ ~ c3 ~")
     .s("sawtooth").lpf(1500).resonance(15)
@@ -85,11 +85,11 @@ stack(
   s("bd bd bd bd"),
   s("~ cp ~ cp").gain(0.5),
   s("hh*8").gain(0.25),
-  s("~ ~ ~ ~ oh ~ ~ ~").gain(0.3),
+  s("~ ~ ~ ~ 808oh ~ ~ ~").gain(0.3),
   note("<[c3,e3,g3,b3] [a2,c3,e3,a3] [f2,a2,c3,f3] [g2,b2,d3,g3]>")
-    .s("sawtooth").arp("up").lpf(2500)
+    .s("sawtooth").detune(12).arp("up").lpf(2500)
     .room(0.3).delay(0.3).delaytime(0.125).delayfeedback(0.4)
-    .every(8, add(note(12))).gain(0.4),
+    .every(8, add(note(12))).gain(0.5),
   note("<c2 a1 f1 g1>").s("sawtooth").lpf(300).gain(0.7),
   note("<c4 e4 g4 b4>/2").s("triangle").room(0.5).gain(0.2)
 ).cpm(138).play()""",
@@ -112,11 +112,11 @@ stack(
   s("[hh hh hh] [hh hh hh] [hh hh hh] [hh hh hh]").gain(0.3),
   s("~ rd ~ ~ ~ rd ~ ~").gain(0.25),
   note("<[c3,e3,g3,b3] [d3,f3,a3,c4] [e3,g3,b3,d4] [a2,c3,e3,g3]>")
-    .s("triangle").lpf(2000).room(0.3).gain(0.5),
-  note("<c2 d2 e2 a1>").s("sawtooth").lpf(400).gain(0.6)
+    .s("triangle").detune(12).lpf(2000).room(0.3).gain(0.6),
+  note("<c2 d2 e2 a1>").s("sawtooth").lpf(400).gain(0.7)
 ).cpm(130).play()""",
         "annotation": (
-            "Jazz quartet voicing with 7th chords on triangle for a warm piano-like "
+            "Jazz quartet voicing with detuned 7th chords on triangle for a warm piano-like "
             "tone, walking bass on sawtooth, triplet hi-hats for swing feel, "
             "ride cymbal accents, and loose kick placement."
         ),
@@ -154,16 +154,16 @@ stack(
   s("[~ bd] ~ [~ bd] ~"),
   s("~ sd ~ sd"),
   s("hh*4").gain(0.3),
-  s("~ ~ ~ ~ ~ ~ ~ rim").gain(0.4),
+  s("~ ~ ~ ~ ~ ~ ~ cp").gain(0.4),
   note("~ <[c3,eb3,g3] [f2,ab2,c3] [g2,bb2,d3] [c3,eb3,g3]> ~ ~")
-    .s("square").lpf(600).gain(0.5),
+    .s("square").detune(12).lpf(1000).room(0.3).gain(0.6),
   note("<c2 f2 g2 c2>").s("sawtooth").lpf(300)
-    .delay(0.4).delaytime(0.188).delayfeedback(0.5).gain(0.7)
+    .delay(0.4).delaytime(0.188).delayfeedback(0.5).gain(0.8)
 ).cpm(75).play()""",
         "annotation": (
             "Dub reggae with offbeat kicks (skank rhythm), minor chords on square "
             "wave with low-pass filter, heavy dub delay on the bass for that classic "
-            "echo, rimshot accent. Steady one-drop snare."
+            "echo, clap accent. Steady one-drop snare."
         ),
     },
     # 8. Funky Groove
@@ -199,7 +199,7 @@ stack(
   s("[bd ~] [~ bd] [~ bd] [bd ~]"),
   s("~ [sd ~] ~ [sd ~]").gain(0.5),
   s("[~ hh] [hh ~] [~ hh] [hh hh]").gain(0.35),
-  s("~ ~ rim ~").gain(0.3),
+  s("~ ~ cp ~").gain(0.3),
   note("<[c3,e3,g3] [d3,f3,a3] [e3,g3,b3] [a2,c3,e3]>")
     .s("triangle").lpf(1500).room(0.3).gain(0.45),
   note("<c2 d2 e2 a1>").s("sawtooth").lpf(350).gain(0.6)
@@ -207,7 +207,7 @@ stack(
         "annotation": (
             "Bossa nova with the classic syncopated kick pattern, brushed snare "
             "feel via soft gain, off-beat hi-hats, triangle chords for warm keys, "
-            "walking bass. Rimshot adds a subtle cross-stick accent."
+            "walking bass. Clap adds a subtle percussive accent."
         ),
     },
     # 10. Trap Banger
@@ -242,10 +242,10 @@ stack(
   s("bd ~ bd ~"),
   s("~ ~ ~ ~ ~ ~ ~ cp"),
   s("hh*4").gain(0.3),
-  s("~ [~ oh] ~ [~ oh]").gain(0.35),
+  s("~ [~ 808oh] ~ [~ 808oh]").gain(0.35),
   note("<[c3,e3,g3] [f3,a3,c4] [g3,b3,d4] [e3,g3,b3]>")
-    .s("sawtooth").lpf(1200).resonance(8).gain(0.4),
-  note("c1").s("sine").gain(0.7).lpf(150)
+    .s("sawtooth").detune(12).lpf(1200).resonance(8).room(0.3).gain(0.5),
+  note("c1").s("sine").gain(0.8).lpf(150)
 ).cpm(124).play()""",
         "annotation": (
             "Deep house groove with 4/4 kick, off-beat open hats for shuffle, "
@@ -287,14 +287,14 @@ stack(
   s("bd ~ ~ ~ bd ~ ~ ~"),
   s("~ ~ sd? ~ ~ ~ sd? ~").gain(0.5),
   s("hh*8").sometimes(fast(2)).gain(0.2),
-  s("~ ~ ~ rim? ~ ~ ~ ~").gain(0.3),
+  s("~ ~ ~ cp? ~ ~ ~ ~").gain(0.3),
   note("c3 ~ ~ e3 ~ ~ g3 ~")
     .s("sine").delay(0.4).delaytime(0.125)
     .delayfeedback(0.4).gain(0.4),
   note("c1 ~ ~ ~").s("sine").gain(0.6)
 ).cpm(128).play()""",
         "annotation": (
-            "Minimal glitch with sparse elements and randomness. Snare and rimshot "
+            "Minimal glitch with sparse elements and randomness. Snare and clap "
             "use ? for 50% probability, hi-hats sometimes double in speed. "
             "Sine melody with delay creates micro-textures. Very stripped back."
         ),
@@ -331,12 +331,12 @@ stack(
         "code": """\
 stack(
   note("<[c3,e3,g3,b3] [a2,c3,e3,g3] [f2,a2,c3,e3] [g2,b2,d3,f3]>")
-    .s("triangle").room(0.8).size(0.9).lpf(1200)
-    .attack(0.5).release(1).gain(0.4),
+    .s("triangle").detune(12).room(0.8).size(0.9).lpf(1200)
+    .attack(0.5).release(1).gain(0.6),
   note("<c4 e4 g4 b4>/2")
     .s("sine").room(0.9).delay(0.5).delaytime(0.25).delayfeedback(0.6)
-    .gain(0.2),
-  note("c1").s("sine").gain(0.5).lpf(100),
+    .gain(0.35),
+  note("c1").s("sine").gain(0.6).lpf(100),
   s("~ ~ ~ ~ ~ ~ ~ noise").gain(0.05).room(0.9)
 ).cpm(55).play()""",
         "annotation": (
@@ -355,48 +355,37 @@ stack(
         "code": """\
 const intro = stack(
   s("bd ~ ~ ~"),
-  s("hh*4").gain(0.15),
+  s("hh*4").gain(0.2),
   note("<[c3,e3,g3] [a2,c3,e3]>")
-    .s("triangle").lpf(600).room(0.5).gain(0.3)
-)
-
-const verse = stack(
-  s("bd ~ [~ bd] ~"),
-  s("~ sd ~ sd").gain(0.6),
-  s("[hh hh] [hh hh] [hh hh] [hh ~]").gain(0.25),
-  note("<[c3,e3,g3] [a2,c3,e3] [f2,a2,c3] [g2,b2,d3]>")
-    .s("triangle").lpf(800).room(0.4).delay(0.2).gain(0.5),
-  note("<c2 c2 f2 g2>").s("sine").lpf(200).gain(0.6)
+    .s("triangle").detune(12).lpf(1000).room(0.5).gain(0.5),
+  note("<c2 c2>").s("sine").lpf(200).gain(0.6)
 )
 
 const chorus = stack(
   s("bd ~ [~ bd] ~"),
   s("~ sd ~ sd").gain(0.7),
-  s("hh*8").gain(0.2),
-  s("~ ~ ~ ~ ~ ~ ~ cp").gain(0.4),
+  s("hh*8").gain(0.3),
+  s("~ ~ ~ ~ ~ ~ ~ cp").gain(0.5),
   note("<[c3,e3,g3,b3] [a2,c3,e3,g3] [f2,a2,c3,e3] [g2,b2,d3,f3]>")
-    .s("triangle").lpf(1200).room(0.5).delay(0.3).gain(0.5),
+    .s("triangle").detune(12).lpf(1200).room(0.5).delay(0.3).gain(0.6),
   note("<c2 a1 f1 g1>").s("sine").lpf(200).gain(0.7)
 )
 
 const outro = stack(
   s("bd ~ ~ ~"),
-  note("<[c3,e3,g3]>").s("triangle").lpf(600).room(0.7).gain(0.25)
+  note("<[c3,e3,g3]>").s("triangle").detune(12).lpf(800).room(0.7).gain(0.4)
 )
 
 arrange(
-  [4, intro],
-  [8, verse],
-  [8, chorus],
-  [8, verse],
-  [8, chorus],
-  [4, outro]
+  [8, intro],
+  [24, chorus],
+  [8, outro]
 ).cpm(82).play()""",
         "annotation": (
-            "Full lo-fi song using arrange() for structure. Intro is sparse with "
-            "just kick, hats, and filtered chords. Verse adds the full beat with "
-            "ghost kicks and delay chords. Chorus opens up the filter, adds clap "
-            "and 7th chords. Outro strips back to a reverb-soaked ending."
+            "Full lo-fi song using arrange() with 3 sections and a long 24-cycle chorus. "
+            "Intro is sparse with kick, hats, and detuned filtered chords. "
+            "Chorus has full energy: all layers, brighter filters, 7th chords with detune. "
+            "Outro strips back to a reverb-soaked ending. Gains raised for recording quality."
         ),
     },
     # 17. Arranged Techno Track
@@ -408,56 +397,37 @@ arrange(
         "code": """\
 const intro = stack(
   s("bd bd bd bd"),
-  s("hh*4").gain(0.2),
-  note("c1").s("sine").lpf(100).gain(0.5)
-)
-
-const buildup = stack(
-  s("bd bd bd bd"),
-  s("~ cp ~ cp").gain(0.4),
-  s("hh*8").gain(0.25),
-  note("c1 ~ c1 ~").s("sine").lpf(150).gain(0.7),
-  note("c3 ~ ~ ~").s("sawtooth").lpf(800).resonance(10).gain(0.3)
+  s("hh*4").gain(0.25),
+  note("c1").s("sine").lpf(100).gain(0.6)
 )
 
 const drop = stack(
   s("bd bd bd bd"),
   s("~ cp ~ cp").gain(0.6),
   s("hh*8").gain(0.3),
-  s("~ ~ ~ ~ ~ ~ [oh ~] ~").gain(0.4),
+  s("~ ~ ~ ~ ~ ~ [808oh ~] ~").gain(0.4),
   note("c1 ~ c1 ~").s("sine").lpf(200).gain(0.9),
   note("c3 ~ ~ c3 ~ ~ c3 ~")
-    .s("sawtooth").lpf(1500).resonance(15)
-    .every(4, fast(2)).gain(0.4)
-)
-
-const breakdown = stack(
-  s("~ ~ ~ ~ bd ~ ~ ~").gain(0.5),
-  s("hh*4").gain(0.15),
-  note("<[c3,eb3,g3] [ab2,c3,eb3]>")
-    .s("sawtooth").lpf(600).room(0.5).gain(0.3),
-  note("c1").s("sine").lpf(100).gain(0.4)
+    .s("sawtooth").detune(12).lpf(1500).resonance(15)
+    .room(0.3).every(4, fast(2)).gain(0.5)
 )
 
 const outro = stack(
   s("bd bd bd bd"),
-  s("hh*4").gain(0.15),
-  note("c1").s("sine").lpf(100).gain(0.4)
+  s("hh*4").gain(0.2),
+  note("c1").s("sine").lpf(100).gain(0.5)
 )
 
 arrange(
-  [4, intro],
-  [8, buildup],
-  [16, drop],
-  [8, breakdown],
-  [16, drop],
-  [4, outro]
+  [8, intro],
+  [24, drop],
+  [8, outro]
 ).cpm(132).play()""",
         "annotation": (
-            "Full techno track with arrange(). Intro: just kick, hats, and sub. "
-            "Buildup: adds clap, faster hats, and a filtered stab. Drop: full "
-            "energy with resonant sawtooth that doubles speed every 4 bars, open hat. "
-            "Breakdown: strips to pads and sparse kick. Second drop, then outro."
+            "Full techno track with arrange() and 3 sections. Intro: kick, hats, sub. "
+            "Drop: 24 cycles of full energy with resonant detuned sawtooth that "
+            "doubles speed every 4 bars, open hat, room reverb. "
+            "Outro winds down. Long drop hold maximizes recording quality."
         ),
     },
     # 18. Bonus: Acid House
@@ -471,7 +441,7 @@ stack(
   s("bd bd bd bd"),
   s("~ ~ ~ ~ ~ ~ ~ cp").gain(0.5),
   s("hh*8").gain(0.25),
-  s("~ [~ oh] ~ [~ oh]").gain(0.3),
+  s("~ [~ 808oh] ~ [~ 808oh]").gain(0.3),
   note("c2 c2 [c2 c3] c2 c2 [c2 eb2] c2 c2")
     .s("sawtooth").lpf(500).resonance(25)
     .every(2, x => x.lpf(2000)).gain(0.6),

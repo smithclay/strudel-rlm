@@ -51,11 +51,11 @@ Count these concrete criteria:
 Base score is 3. Add points for each criterion met. Cap at 10.
 Example: arrange() ✓(+2=5), 4 sections ✓(+1=6), layer contrast ✓(+1=7), filter contrast ✓(+1=8), sparse intro ✓(+1=9), outro winds down ✓(+1=10) → ARRANGEMENT: 10/10
 
-PRODUCTION (mix balance, effects serve music, frequency spread):
-- 3/10: all layers same gain, no effects, muddy
-- 5/10: some gain variation, basic lpf, one effect
-- 7/10: balanced gains, lpf+room+delay, effects match genre
-- 9/10: layered effects, frequency separation, crush/shape for texture
+PRODUCTION (mix clarity, gain staging, mid-range presence):
+- 3/10: all layers same gain, chords muffled (lpf < 600), no effects, bass inaudible
+- 5/10: some gain variation, chords still dark (lpf < 800), one effect type
+- 7/10: clear gain hierarchy (bass 0.7+, chords 0.4-0.6, hats 0.2-0.35), chords lpf 700-1200, delay on 2+ layers
+- 9/10: every layer audible at intended level, warm mid-range (lpf 800-1200 on chords), bass with harmonics (sawtooth not sine), delay creates depth without muddiness
 
 ## Revision rules — for each dimension below 7:
 - Name the specific section and layer
@@ -116,7 +116,7 @@ class CriticResult:
 
     @property
     def approved(self) -> bool:
-        return self.average >= 7.0 and self.min_score >= 6
+        return self.average >= 8.0 and self.min_score >= 7
 
     def format_feedback(self) -> str:
         lines = [
@@ -215,6 +215,9 @@ def parse_critic_output(text: str) -> CriticResult:
     scores: dict[str, int] = {}
     reasons: dict[str, str] = {}
 
+    # Split into lines for multi-line reason extraction
+    text_lines = text.splitlines()
+
     # Try /10 patterns first
     for pattern in _SCORE_PATTERNS:
         for m in pattern.finditer(text):
@@ -222,6 +225,25 @@ def parse_critic_output(text: str) -> CriticResult:
             if dim and dim not in scores:
                 scores[dim] = min(int(m.group(2)), 10)
                 reason = _clean_reason(m.group(3) or "")
+                # Gemini multi-line: if reason is empty, grab indented bullets on following lines
+                if not reason:
+                    match_line_idx = text[:m.start()].count('\n')
+                    reason_parts: list[str] = []
+                    for subsequent in text_lines[match_line_idx + 1:]:
+                        stripped = subsequent.strip().lstrip("*•- ")
+                        # Stop at next score line (contains N/10 or N/5), empty line, or REVISIONS
+                        if not subsequent.strip():
+                            break
+                        if re.search(r'\d{1,2}\s*/\s*(?:10|5)', subsequent):
+                            break
+                        if re.match(r'REVISIONS?\s*:', subsequent, re.IGNORECASE):
+                            break
+                        # Grab indented bullet content
+                        bullet = re.match(r'^[\s*•-]+(.+)', subsequent)
+                        if bullet:
+                            reason_parts.append(_clean_reason(bullet.group(1)))
+                    if reason_parts:
+                        reason = "; ".join(p for p in reason_parts if p)
                 if reason:
                     reasons[dim] = reason
 
@@ -240,7 +262,7 @@ def parse_critic_output(text: str) -> CriticResult:
 
     # Fallback: look for any "N/10" or "N/5" near dimension keywords
     if len(scores) < 4:
-        for line in text.splitlines():
+        for line_idx, line in enumerate(text_lines):
             line_lower = line.lower()
             for keyword, dim in _DIM_NORMALIZE.items():
                 if keyword in line_lower and dim not in scores:
@@ -253,9 +275,24 @@ def parse_critic_output(text: str) -> CriticResult:
                         if num_match:
                             scores[dim] = min(int(num_match.group(1)) * 2, 10)
                     if num_match:
-                        after = line[num_match.end():].strip().lstrip("-—: ").strip()
+                        after = _clean_reason(line[num_match.end():])
+                        if not after:
+                            # Multi-line: grab indented bullets below
+                            reason_parts_fb: list[str] = []
+                            for subsequent in text_lines[line_idx + 1:]:
+                                if not subsequent.strip():
+                                    break
+                                if re.search(r'\d{1,2}\s*/\s*(?:10|5)', subsequent):
+                                    break
+                                if re.match(r'REVISIONS?\s*:', subsequent, re.IGNORECASE):
+                                    break
+                                bullet = re.match(r'^[\s*•-]+(.+)', subsequent)
+                                if bullet:
+                                    reason_parts_fb.append(_clean_reason(bullet.group(1)))
+                            if reason_parts_fb:
+                                after = "; ".join(p for p in reason_parts_fb if p)
                         if after:
-                            reasons[dim] = after.rstrip(".")
+                            reasons[dim] = after
 
     # Last resort: bare number after dimension keyword (e.g. "**Harmonic Quality:** 4.")
     if len(scores) < 4:
@@ -326,6 +363,92 @@ def parse_critic_output(text: str) -> CriticResult:
 
 
 # ---------------------------------------------------------------------------
+# Mechanical production analysis
+# ---------------------------------------------------------------------------
+
+
+def analyze_production(code: str) -> str:
+    """Scan Strudel code for measurable production facts.
+
+    Returns a text block suitable for injection into the critic prompt so the
+    LLM can't overlook concrete issues like muffled filters or inaudible gains.
+    """
+    findings: list[str] = []
+
+    # --- LPF analysis (separate bass vs non-bass layers) ---
+    bass_lpfs: list[int] = []
+    nonbass_lpfs: list[int] = []
+    for line in code.splitlines():
+        lpf_matches = re.findall(r'\.lpf\((\d+)\)', line)
+        if not lpf_matches:
+            continue
+        is_bass = bool(re.search(r'(?:bass|jvbass|"sine")', line, re.IGNORECASE)) and \
+                  bool(re.search(r'note\(".*?[0-2]"?\)', line))
+        for v in lpf_matches:
+            val = int(v)
+            if is_bass:
+                bass_lpfs.append(val)
+            else:
+                nonbass_lpfs.append(val)
+
+    if nonbass_lpfs:
+        max_nonbass = max(nonbass_lpfs)
+        if max_nonbass < 700:
+            findings.append(f"PROBLEM: All non-bass layers have lpf <= {max_nonbass}Hz — mix sounds muffled. Chords need lpf 700-1200.")
+        elif max_nonbass > 2000:
+            findings.append(f"WARNING: Non-bass lpf goes up to {max_nonbass}Hz — may sound harsh. Sweet spot is 700-1200 for chords.")
+
+    # --- Bass synth choice ---
+    sine_bass = bool(re.search(r'"sine".*?\.lpf\(\d{2,3}\)', code))
+    saw_bass = bool(re.search(r'"sawtooth".*?\.lpf\([234]\d\d\)', code))
+    if sine_bass and not saw_bass:
+        findings.append("NOTE: Bass uses sine — lacks harmonics. Sawtooth with lpf(300-400) translates better on all speakers.")
+
+    # --- Gain analysis ---
+    gains: list[float] = [float(g) for g in re.findall(r'\.gain\(([\d.]+)\)', code)]
+    if gains:
+        very_quiet = [g for g in gains if g < 0.15]
+        if very_quiet:
+            findings.append(f"PROBLEM: {len(very_quiet)} layer(s) with gain < 0.15 — inaudible.")
+        melodic_gains: list[float] = []
+        for line in code.splitlines():
+            if 'note(' in line or '.s("sawtooth")' in line or '.s("triangle")' in line or '.s("square")' in line:
+                for g in re.findall(r'\.gain\(([\d.]+)\)', line):
+                    melodic_gains.append(float(g))
+        if melodic_gains and max(melodic_gains) < 0.35:
+            findings.append(f"PROBLEM: All melodic/harmonic layers have gain <= {max(melodic_gains)} — too quiet.")
+
+    # --- Effects analysis (less is more) ---
+    has_delay = bool(re.search(r'\.delay\(', code))
+    if not has_delay:
+        findings.append("MISSING: No .delay() — delay is the primary depth/space effect.")
+
+    room_count = len(re.findall(r'\.room\(', code))
+    if room_count > 6:
+        findings.append(f"WARNING: .room() on {room_count} layers — too much reverb muddies the mix. Use on 1-3 layers.")
+
+    # --- Layer count per section ---
+    # Count layers in the densest section
+    sections = re.split(r'const\s+\w+\s*=\s*stack\s*\(', code)
+    max_layers = 0
+    for section in sections:
+        layer_count = section.count('\n  s(') + section.count('\n  note(') + section.count('\ns(') + section.count('\nnote(')
+        max_layers = max(max_layers, layer_count)
+    if max_layers > 8:
+        findings.append(f"WARNING: Densest section has ~{max_layers} layers — too many competing elements. 5-7 is the sweet spot.")
+
+    # --- Structure check ---
+    has_repetition = bool(re.search(r'\[.*?verse\].*\[.*?chorus\].*\[.*?verse\]', code, re.DOTALL))
+    if not has_repetition:
+        findings.append("NOTE: No verse-chorus repetition detected. Repeating sections improves musical coherence.")
+
+    if not findings:
+        return "CODE ANALYSIS: No production issues detected."
+
+    return "CODE ANALYSIS (mechanical scan — address these in PRODUCTION score):\n" + "\n".join(f"  - {f}" for f in findings)
+
+
+# ---------------------------------------------------------------------------
 # Critic module
 # ---------------------------------------------------------------------------
 
@@ -337,9 +460,14 @@ class StrudelCritic:
         self.predict = dspy.Predict(CriticSignature, instructions=CRITIC_RUBRIC)
 
     def evaluate(self, query: str, strudel_code: str) -> CriticResult:
+        # Mechanical pre-analysis — gives the LLM concrete facts to anchor on
+        analysis = analyze_production(strudel_code)
+        logger.info(f"[critic] {analysis}")
+        augmented_code = f"{analysis}\n\n{strudel_code}"
+
         # Use low temperature for consistent scoring (LLM-as-judge best practice)
         with dspy.context(lm=dspy.settings.lm.copy(temperature=0.0)):
-            result = self.predict(query=query, strudel_code=strudel_code)
+            result = self.predict(query=query, strudel_code=augmented_code)
         logger.info(f"[critic raw output] {result.evaluation[:500]}")
         parsed = parse_critic_output(result.evaluation)
         logger.info(f"[critic parsed] {parsed}")

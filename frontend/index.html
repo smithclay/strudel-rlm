@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>Strudel RLM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      /* Brand palette — warm amber/copper, Ableton Push inspired */
+      --color-accent: oklch(72% 0.15 65);
+      --color-accent-light: oklch(80% 0.10 65);
+      --color-accent-subtle: oklch(25% 0.04 65);
+      --color-success: oklch(68% 0.14 155);
+      --color-success-bg: oklch(22% 0.04 155);
+      --color-warning: oklch(72% 0.15 65);
+      --color-warning-bg: oklch(25% 0.04 65);
+      --color-error: oklch(65% 0.18 25);
+      --color-error-bg: oklch(22% 0.05 25);
+
+      /* Tinted neutrals — warm cast */
+      --neutral-950: oklch(10% 0.01 60);
+      --neutral-900: oklch(14% 0.01 60);
+      --neutral-850: oklch(17% 0.01 60);
+      --neutral-800: oklch(20% 0.008 60);
+      --neutral-700: oklch(25% 0.008 60);
+      --neutral-600: oklch(32% 0.006 60);
+      --neutral-500: oklch(42% 0.005 60);
+      --neutral-400: oklch(55% 0.005 60);
+      --neutral-300: oklch(65% 0.004 60);
+      --neutral-200: oklch(80% 0.004 60);
+      --neutral-100: oklch(92% 0.004 60);
+
+      /* Semantic surface tokens */
+      --surface-base: var(--neutral-950);
+      --surface-raised: var(--neutral-900);
+      --surface-overlay: var(--neutral-850);
+      --surface-input: var(--neutral-800);
+      --border-default: var(--neutral-700);
+      --border-subtle: var(--neutral-800);
+
+      /* Text tokens */
+      --text-primary: var(--neutral-100);
+      --text-secondary: var(--neutral-300);
+      --text-muted: var(--neutral-400);
+      --text-code: oklch(78% 0.08 165);
+
+      /* Typography */
+      --font-ui: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+      --font-mono: 'SF Mono', 'Fira Code', ui-monospace, monospace;
+
+      /* Spacing (4pt base, rem for user scaling) */
+      --space-xs: 0.25rem;
+      --space-sm: 0.5rem;
+      --space-md: 0.75rem;
+      --space-lg: 1rem;
+      --space-xl: 1.5rem;
+      --space-2xl: 2rem;
+
+      /* Motion */
+      --ease-out-quart: cubic-bezier(0.25, 1, 0.5, 1);
+      --duration-fast: 100ms;
+      --duration-normal: 200ms;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: var(--font-ui);
+      background: var(--surface-base);
+      color: var(--text-primary);
+      height: 100dvh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      grid-template-columns: 280px 1fr;
+      grid-template-areas:
+        "header header"
+        "timeline main"
+        "controls controls";
+    }
+
+    /* Skip link */
+    .skip-link {
+      position: absolute;
+      top: -100%;
+      left: var(--space-lg);
+      padding: var(--space-sm) var(--space-lg);
+      background: var(--color-accent);
+      color: var(--text-primary);
+      font-weight: 600;
+      border-radius: 0 0 6px 6px;
+      z-index: 100;
+      text-decoration: none;
+    }
+    .skip-link:focus {
+      top: 0;
+    }
+
+    /* Global focus ring */
+    :focus-visible {
+      outline: 2px solid var(--color-accent-light);
+      outline-offset: 2px;
+    }
+
+    /* Header */
+    header {
+      grid-area: header;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--space-md) var(--space-xl);
+      background: var(--surface-raised);
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    header h1 {
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+    #phase {
+      font-size: 0.8rem;
+      font-weight: 500;
+      padding: var(--space-xs) var(--space-md);
+      border-radius: 999px;
+      background: var(--surface-input);
+      color: var(--text-muted);
+    }
+    #phase.composing { color: var(--color-warning); background: var(--color-warning-bg); }
+    #phase.ready { color: var(--color-success); background: var(--color-success-bg); }
+    #phase.shutting-down { color: var(--color-error); background: var(--color-error-bg); }
+
+    /* Timeline sidebar */
+    #timeline {
+      grid-area: timeline;
+      overflow-y: auto;
+      padding: var(--space-md);
+      border-right: 1px solid var(--border-subtle);
+      background: var(--neutral-900);
+    }
+    #timeline h2 {
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-muted);
+      margin-bottom: var(--space-sm);
+    }
+    .iter-card {
+      padding: var(--space-sm) var(--space-md);
+      margin-bottom: var(--space-xs);
+      border-radius: 6px;
+      background: var(--surface-overlay);
+      cursor: pointer;
+      min-height: 44px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      transition: background var(--duration-fast) var(--ease-out-quart);
+    }
+    .iter-card:hover { background: var(--surface-input); }
+    .iter-card:active { background: var(--neutral-700); }
+    .iter-card.selected { background: var(--surface-input); }
+    .iter-card .iter-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: var(--space-xs);
+    }
+    .iter-card .iter-num { font-size: 0.8rem; font-weight: 600; }
+    .iter-card .iter-badge {
+      font-size: 0;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--neutral-600);
+      flex-shrink: 0;
+    }
+    .iter-card.valid .iter-badge { background: var(--color-success); }
+    .iter-card.error .iter-badge { background: var(--color-error); }
+    .iter-card .iter-preview {
+      font-size: 0.7rem;
+      font-family: var(--font-mono);
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Main panel */
+    #main-panel {
+      grid-area: main;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      padding: var(--space-lg) var(--space-xl);
+    }
+    #viz-canvas {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      display: none;
+      border-radius: 0;
+    }
+    #code-display {
+      flex: 1;
+      background: oklch(8% 0.01 60);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      padding: var(--space-lg);
+      overflow-y: auto;
+      white-space: pre-wrap;
+      font-family: var(--font-mono);
+      font-size: 0.85rem;
+      color: var(--text-code);
+      line-height: 1.5;
+      position: relative;
+      z-index: 1;
+      transition: background var(--duration-normal) var(--ease-out-quart),
+                  opacity var(--duration-normal) var(--ease-out-quart);
+    }
+    #code-display.playing {
+      background: oklch(8% 0.015 270 / 0.7);
+      max-height: 40%;
+      margin-top: auto;
+      flex: none;
+    }
+
+    /* Controls footer */
+    #controls {
+      grid-area: controls;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-sm);
+      padding: var(--space-md) var(--space-xl);
+      padding-bottom: max(var(--space-md), env(safe-area-inset-bottom));
+      background: var(--surface-raised);
+      border-top: 1px solid var(--border-subtle);
+    }
+    #controls button {
+      font-family: var(--font-ui);
+      font-size: 0.85rem;
+      font-weight: 500;
+      padding: var(--space-sm) var(--space-lg);
+      min-height: 44px;
+      border: 1px solid var(--neutral-600);
+      border-radius: 6px;
+      background: var(--surface-input);
+      color: var(--text-primary);
+      cursor: pointer;
+      transition: background var(--duration-fast) var(--ease-out-quart),
+                  border-color var(--duration-fast) var(--ease-out-quart),
+                  transform var(--duration-fast) var(--ease-out-quart);
+    }
+    #controls button:hover:not(:disabled) {
+      background: var(--neutral-700);
+      border-color: var(--neutral-500);
+    }
+    #controls button:active:not(:disabled) {
+      transform: scale(0.97);
+    }
+    #controls button:disabled { opacity: 0.35; cursor: not-allowed; }
+    /* Primary: Play — filled amber */
+    #btn-play {
+      background: var(--color-accent);
+      border-color: var(--color-accent);
+      color: var(--neutral-950);
+      font-weight: 600;
+    }
+    #btn-play:hover:not(:disabled) {
+      background: var(--color-accent-light);
+      border-color: var(--color-accent-light);
+    }
+    /* Secondary: Stop, Viz — ghost neutral */
+    #btn-stop { border-color: var(--neutral-600); color: var(--text-secondary); }
+    #btn-stop:hover:not(:disabled) { background: var(--neutral-700); border-color: var(--neutral-500); }
+    #btn-viz { border-color: var(--neutral-600); color: var(--text-secondary); }
+    #btn-viz:hover:not(:disabled) { background: var(--neutral-700); border-color: var(--neutral-500); }
+    /* Tertiary: Done — text-only danger */
+    #btn-done {
+      background: transparent;
+      border-color: transparent;
+      color: var(--text-muted);
+    }
+    #btn-done:hover:not(:disabled) {
+      color: var(--color-error);
+      background: var(--color-error-bg);
+      border-color: var(--color-error-bg);
+    }
+
+    /* Cycle progress bar */
+    #progress-row {
+      display: none;
+      width: 100%;
+      align-items: center;
+      gap: var(--space-md);
+      margin-top: var(--space-sm);
+    }
+    #progress-bar {
+      flex: 1;
+      height: 4px;
+      background: var(--surface-input);
+      border-radius: 2px;
+      overflow: hidden;
+    }
+    #progress-fill {
+      height: 100%;
+      width: 100%;
+      background: linear-gradient(90deg, var(--color-accent), var(--color-accent-light));
+      border-radius: 2px;
+      transform: scaleX(0);
+      transform-origin: left;
+    }
+    #cycle-count {
+      font-size: 0.75rem;
+      font-weight: 500;
+      color: var(--color-accent-light);
+      white-space: nowrap;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Reduced motion */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: 0.01ms !important;
+      }
+      #viz-canvas {
+        display: none !important;
+      }
+      #code-display.playing {
+        background: oklch(8% 0.015 270 / 0.7);
+      }
+    }
+
+    /* Mobile: stack layout */
+    @media (max-width: 640px) {
+      body {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto 1fr auto;
+        grid-template-areas:
+          "header"
+          "timeline"
+          "main"
+          "controls";
+      }
+      #timeline {
+        border-right: none;
+        border-bottom: 1px solid var(--border-subtle);
+        max-height: 30vh;
+        overflow-y: auto;
+      }
+      #controls {
+        padding-left: var(--space-lg);
+        padding-right: var(--space-lg);
+      }
+    }
+  </style>
+</head>
+<body>
+  <a href="#main-panel" class="skip-link">Skip to main content</a>
+
+  <header>
+    <h1>Strudel RLM</h1>
+    <span id="phase" class="composing">Composing...</span>
+  </header>
+
+  <aside id="timeline" aria-labelledby="timeline-heading">
+    <h2 id="timeline-heading">Iterations</h2>
+    <div id="timeline-list" role="list" aria-label="Iteration history"></div>
+  </aside>
+
+  <main id="main-panel">
+    <canvas id="viz-canvas" aria-hidden="true"></canvas>
+    <pre id="code-display">Waiting for first iteration...</pre>
+  </main>
+
+  <footer id="controls">
+    <button id="btn-play" disabled>&#9654; Play</button>
+    <button id="btn-stop">&#9632; Stop</button>
+    <button id="btn-done" disabled>&#10005; Done</button>
+    <button id="btn-viz" disabled>&#9670; Bars</button>
+    <div id="progress-row">
+      <div id="progress-bar"
+           role="progressbar"
+           aria-valuenow="0"
+           aria-valuemin="0"
+           aria-valuemax="100"
+           aria-label="Cycle progress">
+        <div id="progress-fill"></div>
+      </div>
+      <span id="cycle-count">Cycle 1</span>
+    </div>
+  </footer>
+
+  <script type="module" src="/main.js"></script>
+</body>
+</html>

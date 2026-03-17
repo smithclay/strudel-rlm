@@ -1,4 +1,9 @@
 node_modules
 .env
 __pycache__
+dist/
 *.wav
+frontend/node_modules
+.agents/skills
+library
+.claude/skills

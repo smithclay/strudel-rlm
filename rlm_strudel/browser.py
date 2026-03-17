@@ -2,7 +2,9 @@
 
 import base64
 import os
+import struct
 import time
+import wave
 
 from playwright.sync_api import sync_playwright
 from dspy.utils.callback import BaseCallback
@@ -135,6 +137,11 @@ class StrudelBrowser:
         duration = result.get("durationSec", 0)
         size_kb = len(wav_bytes) / 1024
         print(f"[browser] Saved {size_kb:.0f}KB WAV ({duration:.1f}s) to {output_path}")
+
+        # Post-process: trim leading silence then normalize
+        _trim_leading_silence(output_path, threshold_db=-40.0)
+        _normalize_wav(output_path, target_peak_db=-1.0)
+
         return output_path
 
     def shutdown(self):
@@ -146,6 +153,83 @@ class StrudelBrowser:
             self._playwright.stop()
             self._playwright = None
         self._started = False
+
+
+def _normalize_wav(path: str, target_peak_db: float = -1.0):
+    """Normalize a WAV file in-place to target peak dB using only stdlib."""
+    try:
+        with wave.open(path, "rb") as wf:
+            params = wf.getparams()
+            n_frames = wf.getnframes()
+            raw = wf.readframes(n_frames)
+
+        if params.sampwidth != 2:
+            print(f"[normalize] Skipping — only 16-bit WAV supported (got {params.sampwidth * 8}-bit)")
+            return
+
+        n_samples = n_frames * params.nchannels
+        samples = list(struct.unpack(f"<{n_samples}h", raw))
+
+        peak = max(abs(s) for s in samples) if samples else 0
+        if peak == 0:
+            print("[normalize] Skipping — silent file")
+            return
+
+        import math
+        target_peak = 10 ** (target_peak_db / 20) * 32767
+        scale = target_peak / peak
+        normalized = [max(-32768, min(32767, int(s * scale))) for s in samples]
+
+        with wave.open(path, "wb") as wf:
+            wf.setparams(params)
+            wf.writeframes(struct.pack(f"<{n_samples}h", *normalized))
+
+        gain_db = 20 * math.log10(scale) if scale > 0 else 0
+        print(f"[normalize] peak={peak}/32767 → applied {gain_db:+.1f}dB to reach {target_peak_db}dB target")
+    except Exception as e:
+        print(f"[normalize] Failed (non-fatal): {e}")
+
+
+def _trim_leading_silence(path: str, threshold_db: float = -40.0):
+    """Trim leading silence from a WAV file in-place."""
+    try:
+        import math
+        threshold_amp = int(10 ** (threshold_db / 20) * 32767)
+
+        with wave.open(path, "rb") as wf:
+            params = wf.getparams()
+            n_frames = wf.getnframes()
+            raw = wf.readframes(n_frames)
+
+        if params.sampwidth != 2:
+            return
+
+        n_samples = n_frames * params.nchannels
+        samples = struct.unpack(f"<{n_samples}h", raw)
+
+        # Find first frame where any channel exceeds threshold
+        first_loud = 0
+        for i in range(0, n_samples, params.nchannels):
+            if any(abs(samples[i + ch]) > threshold_amp for ch in range(params.nchannels)):
+                first_loud = i // params.nchannels
+                break
+        else:
+            return  # all silent, don't destroy the file
+
+        if first_loud == 0:
+            return  # no leading silence
+
+        trimmed_frames = n_frames - first_loud
+        trimmed_samples = samples[first_loud * params.nchannels:]
+
+        with wave.open(path, "wb") as wf:
+            wf.setparams(params._replace(nframes=trimmed_frames))
+            wf.writeframes(struct.pack(f"<{len(trimmed_samples)}h", *trimmed_samples))
+
+        trimmed_ms = first_loud / params.framerate * 1000
+        print(f"[trim] Removed {trimmed_ms:.0f}ms of leading silence")
+    except Exception as e:
+        print(f"[trim] Failed (non-fatal): {e}")
 
 
 class BrowserCallback(BaseCallback):

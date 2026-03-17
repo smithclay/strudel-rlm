@@ -21,6 +21,38 @@ load_dotenv(os.path.join(project_root, ".env"))
 from rlm_strudel.rlm_runner import run_strudel_rlm
 
 
+def compute_skip_seconds(code: str) -> float:
+    """Parse arrange() to compute how many seconds of intro/verse to skip.
+
+    Skips all sections before the largest (densest) section, which is
+    assumed to be the chorus/drop. Returns 0 if no arrange() found.
+    """
+    import re
+    m = re.search(r'arrange\s*\(([\s\S]*?)\)\s*\.', code)
+    if not m:
+        return 0.0
+
+    # Extract [N, name] pairs
+    entries = re.findall(r'\[\s*(\d+)\s*,\s*(\w+)\s*\]', m.group(1))
+    if len(entries) < 3:
+        return 0.0  # too few sections to bother skipping
+
+    # Parse cpm
+    cpm_match = re.search(r'\.cpm\((\d+(?:\.\d+)?)\)', code)
+    cpm = float(cpm_match.group(1)) if cpm_match else 60.0
+    sec_per_cycle = 60.0 / cpm
+
+    # Find index of first section with the largest cycle count (likely the chorus/drop)
+    max_cycles = max(int(e[0]) for e in entries)
+    for i, (cycles, _name) in enumerate(entries):
+        if int(cycles) == max_cycles:
+            # Skip everything before this section
+            skip_cycles = sum(int(entries[j][0]) for j in range(i))
+            return skip_cycles * sec_per_cycle
+
+    return 0.0
+
+
 def _wait_for_url(url: str, timeout: float = 10.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -37,7 +69,7 @@ def start_static_server(url: str):
     parsed = urllib.parse.urlparse(url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 5173
-    dist_dir = os.path.join(project_root, "dist")
+    dist_dir = os.path.join(project_root, "frontend", "dist")
 
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=dist_dir)
     server = http.server.HTTPServer((host, port), handler)
@@ -57,7 +89,7 @@ def main():
     parser.add_argument("--no-server", action="store_true", help="Skip starting the static server (if already running)")
     parser.add_argument("--url", default="http://127.0.0.1:5173", help="Strudel app URL")
     parser.add_argument("--record", type=int, default=0, metavar="SECONDS",
-                        help="Record N seconds of audio to WAV (0=disabled)")
+                        help="Record N seconds of audio to WAV (0=disabled, default 30 when enabled)")
     args = parser.parse_args()
 
     server = None
@@ -96,15 +128,20 @@ def main():
                 browser.signal_rlm_complete(code)
             except Exception as e:
                 print(f"[warn] signal_rlm_complete failed: {e}")
-            if args.record > 0:
-                browser.start_recording()
             try:
                 browser.play_in_browser(code)
             except Exception as e:
                 print(f"[warn] play_in_browser failed: {e}")
             if args.record > 0:
-                print(f"\nRecording {args.record}s of audio...")
-                time.sleep(args.record)
+                # Skip intro sections to record the chorus/drop
+                skip_s = compute_skip_seconds(code)
+                if skip_s > 0:
+                    print(f"\nSkipping {skip_s:.1f}s of intro before recording...")
+                    time.sleep(skip_s)
+                browser.start_recording()
+                record_seconds = args.record
+                print(f"\nRecording {record_seconds}s of audio...")
+                time.sleep(record_seconds)
                 # Find the library .js path to derive .wav path
                 import glob as g
                 js_files = sorted(g.glob(os.path.join(project_root, "library", "*.js")))
