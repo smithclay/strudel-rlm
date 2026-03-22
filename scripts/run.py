@@ -86,6 +86,7 @@ def main():
     parser.add_argument("--max-iters", type=int, default=10, help="Max RLM iterations (default: 10)")
     parser.add_argument("--max-llm-calls", type=int, default=20, help="Max sub-LLM calls via llm_query (default: 20)")
     parser.add_argument("--max-debate-rounds", type=int, default=3, help="Max composer/critic debate rounds (default: 3)")
+    parser.add_argument("--max-tokens", type=int, default=None, help="Optional LM max_tokens override")
     parser.add_argument("--no-server", action="store_true", help="Skip starting the static server (if already running)")
     parser.add_argument("--url", default="http://127.0.0.1:5173", help="Strudel app URL")
     parser.add_argument("--record", type=int, default=0, metavar="SECONDS",
@@ -110,6 +111,7 @@ def main():
             max_llm_calls=args.max_llm_calls,
             max_debate_rounds=args.max_debate_rounds,
             url=args.url,
+            max_tokens=args.max_tokens,
         )
 
         print("\n" + "=" * 60)
