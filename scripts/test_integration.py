@@ -3,6 +3,7 @@
 import sys
 import os
 import inspect
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -24,20 +25,34 @@ def run_test(name, fn):
 def test_imports():
     """All new modules import cleanly."""
     from rlm_strudel.references import REFERENCES, select_references, format_references_for_prompt
-    from rlm_strudel.critic import StrudelCritic, parse_critic_output, CriticResult
-    from rlm_strudel.rlm_runner import run_strudel_rlm, ORCHESTRATOR_INSTRUCTIONS
+    from rlm_strudel.critic import StrudelCritic, parse_critic_output, CriticResult, CriticSignature
+    from rlm_strudel.prompts import build_lofi_context_sections
+    from rlm_strudel.rlm_runner import (
+        run_strudel_rlm,
+        ORCHESTRATOR_INSTRUCTIONS,
+        MIX_PRIORITIES,
+        ComposeSectionSignature,
+        normalize_lofi_brief,
+        composition_shape_issues,
+        _build_reference_context,
+    )
     assert REFERENCES is not None, "REFERENCES is None"
     assert callable(select_references), "select_references not callable"
     assert callable(format_references_for_prompt), "format_references_for_prompt not callable"
     assert callable(parse_critic_output), "parse_critic_output not callable"
+    assert callable(build_lofi_context_sections), "build_lofi_context_sections not callable"
+    assert callable(normalize_lofi_brief), "normalize_lofi_brief not callable"
+    assert callable(composition_shape_issues), "composition_shape_issues not callable"
     assert callable(run_strudel_rlm), "run_strudel_rlm not callable"
     assert ORCHESTRATOR_INSTRUCTIONS is not None, "ORCHESTRATOR_INSTRUCTIONS is None"
+    assert MIX_PRIORITIES is not None, "MIX_PRIORITIES is None"
+    assert CriticSignature is not None, "CriticSignature is None"
 
 
 def test_orchestrator_has_new_features():
     """ORCHESTRATOR_INSTRUCTIONS contains expected v3 keywords."""
     from rlm_strudel.rlm_runner import ORCHESTRATOR_INSTRUCTIONS
-    for keyword in ["compose_section", "validate_code", "SUBMIT", "arrange()", "forbidden"]:
+    for keyword in ["compose_section", "validate_code", "SUBMIT", "arrange()", "forbidden", "section_prompts", "tempo_cpm", "brief"]:
         assert keyword in ORCHESTRATOR_INSTRUCTIONS, f"Missing '{keyword}' in ORCHESTRATOR_INSTRUCTIONS"
 
 
@@ -49,20 +64,16 @@ def test_context_has_new_features():
 
 
 def test_reference_pipeline():
-    """References select and format correctly for a genre query."""
+    """References stay in the lo-fi lane and format correctly."""
     from rlm_strudel.references import select_references, format_references_for_prompt
-    refs = select_references("dark ambient atmospheric", n=5)
+    refs = select_references("study beat with intro chorus outro", n=3)
     assert len(refs) > 0, "No references returned"
     formatted = format_references_for_prompt(refs)
     assert "Reference 1:" in formatted, "Formatted output missing 'Reference 1:'"
     assert "```" in formatted, "Formatted output missing code blocks"
-    # At least one result should be relevant to the query
-    names = [r["name"] for r in refs]
-    has_relevant = any(
-        "dark" in n.lower() or "ambient" in n.lower() or "atmospheric" in n.lower()
-        for n in names
-    )
-    assert has_relevant, f"No relevant refs for 'dark ambient atmospheric', got: {names}"
+    assert all("lo-fi" in r["genre_tags"] for r in refs), f"Expected lo-fi refs, got: {[r['genre_tags'] for r in refs]}"
+    assert all("hip hop" in r["genre_tags"] for r in refs), f"Expected hip hop refs, got: {[r['genre_tags'] for r in refs]}"
+    assert any("arranged" in r["genre_tags"] for r in refs), f"Expected an arranged lo-fi ref, got: {[r['name'] for r in refs]}"
 
 
 def test_critic_pipeline():
@@ -109,6 +120,80 @@ def test_extract_context_sections():
     assert "Lo-fi" in sections["effects"], "effects section missing 'Lo-fi'"
     assert "Hip Hop" in sections["genres"], "genres section missing 'Hip Hop'"
     assert "note(" in sections["api"], "api section missing 'note('"
+
+
+def test_build_lofi_context_sections():
+    """build_lofi_context_sections trims genre/effects context to the lo-fi lane."""
+    from rlm_strudel.prompts import STRUDEL_CONTEXT, build_lofi_context_sections
+    sections = build_lofi_context_sections(STRUDEL_CONTEXT)
+    assert "Lo-fi Hip Hop" in sections["genres"], "lo-fi genre subsection missing"
+    assert "Hip Hop" in sections["genres"], "hip hop subsection missing"
+    assert "Techno" not in sections["genres"], "genres section should be narrowed to lo-fi"
+    assert "Lo-fi Sound" in sections["effects"], "lo-fi effects subsection missing"
+    assert "Warm Analog" in sections["effects"], "warm analog effects subsection missing"
+    assert "Acid Squelch" not in sections["effects"], "effects section should be narrowed to lo-fi"
+
+
+def test_normalize_lofi_brief():
+    """normalize_lofi_brief clamps tempo and pads missing section prompts."""
+    from rlm_strudel.rlm_runner import normalize_lofi_brief
+    raw = SimpleNamespace(
+        tempo_cpm=140,
+        mood_keywords=["dusty", "late-night", "warm"],
+        texture_keywords=["vinyl crackle", "soft saturation"],
+        must_include=["swing hats"],
+        avoid="hard trap drums",
+        section_prompts=["Intro only"],
+        brief="",
+    )
+    brief = normalize_lofi_brief(raw, "study beat")
+    assert brief.tempo_cpm == 92, f"Tempo should clamp to 92, got {brief.tempo_cpm}"
+    assert len(brief.section_prompts) == 4, f"Expected 4 section prompts, got {brief.section_prompts}"
+    assert "cpm(92)" in brief.section_prompts[1], f"Expected normalized tempo in section prompts, got {brief.section_prompts}"
+    assert "lo-fi hip hop" in brief.brief.lower(), f"Expected fallback brief to mention lo-fi hip hop, got: {brief.brief}"
+
+
+def test_composition_shape_issues_complete():
+    """composition_shape_issues accepts a full arranged song."""
+    from rlm_strudel.rlm_runner import composition_shape_issues
+    code = '''const intro = stack(
+  s("bd ~ ~ ~")
+)
+
+const verse = stack(
+  s("bd ~ [~ bd] ~")
+)
+
+const chorus = stack(
+  s("bd ~ [~ bd] ~"),
+  s("hh*8").gain(0.2)
+)
+
+const outro = stack(
+  s("bd ~ ~ ~")
+)
+
+arrange(
+  [4, intro],
+  [8, verse],
+  [8, chorus],
+  [8, verse],
+  [8, chorus],
+  [4, outro]
+).cpm(78).play()'''
+    assert composition_shape_issues(code) == [], f"Expected complete composition, got {composition_shape_issues(code)}"
+
+
+def test_composition_shape_issues_partial():
+    """composition_shape_issues flags incomplete drafts."""
+    from rlm_strudel.rlm_runner import composition_shape_issues
+    code = '''stack(
+  s("bd ~ ~ ~"),
+  s("hh*4").gain(0.2)
+).cpm(78).play()'''
+    issues = composition_shape_issues(code)
+    assert "missing arrange() song structure" in issues, f"Expected arrange() issue, got {issues}"
+    assert any("missing section: chorus" == issue for issue in issues), f"Expected missing chorus, got {issues}"
 
 
 def test_validate_semantic():
@@ -274,6 +359,153 @@ REVISIONS:
     assert len(result.revisions) == 3, f"Expected 3 revisions, got {len(result.revisions)}"
 
 
+def test_structured_prediction_to_result():
+    """structured_prediction_to_result handles normal, edge, and malformed inputs."""
+    from rlm_strudel.critic import structured_prediction_to_result
+
+    # Normal case
+    pred = SimpleNamespace(
+        harmony=8, rhythm=7, arrangement=9, production=6,
+        harmony_reason="good voicings", rhythm_reason="solid groove",
+        arrangement_reason="nice structure", production_reason="needs polish",
+        revisions=["[chorus] open lpf to 1200"],
+    )
+    r = structured_prediction_to_result(pred)
+    assert r.harmony == 8, f"Expected harmony=8, got {r.harmony}"
+    assert r.rhythm == 7, f"Expected rhythm=7, got {r.rhythm}"
+    assert r.arrangement == 9, f"Expected arrangement=9, got {r.arrangement}"
+    assert r.production == 6, f"Expected production=6, got {r.production}"
+    assert r.reasons["harmony"] == "good voicings"
+    assert len(r.revisions) == 1
+
+    # Non-integer score defaults to 5
+    pred2 = SimpleNamespace(
+        harmony="seven", rhythm=7, arrangement=8, production=7,
+        harmony_reason="", rhythm_reason="", arrangement_reason="", production_reason="",
+        revisions=[],
+    )
+    r2 = structured_prediction_to_result(pred2)
+    assert r2.harmony == 5, f"String score should default to 5, got {r2.harmony}"
+
+    # Out-of-range scores clamp to 1-10
+    pred3 = SimpleNamespace(
+        harmony=0, rhythm=15, arrangement=-3, production=11,
+        harmony_reason="", rhythm_reason="", arrangement_reason="", production_reason="",
+        revisions=[],
+    )
+    r3 = structured_prediction_to_result(pred3)
+    assert r3.harmony == 1, f"Score 0 should clamp to 1, got {r3.harmony}"
+    assert r3.rhythm == 10, f"Score 15 should clamp to 10, got {r3.rhythm}"
+    assert r3.arrangement == 1, f"Score -3 should clamp to 1, got {r3.arrangement}"
+    assert r3.production == 10, f"Score 11 should clamp to 10, got {r3.production}"
+
+    # Single string revision is wrapped into a list
+    pred4 = SimpleNamespace(
+        harmony=7, rhythm=7, arrangement=7, production=7,
+        harmony_reason="", rhythm_reason="", arrangement_reason="", production_reason="",
+        revisions="[verse] add ghost kick",
+    )
+    r4 = structured_prediction_to_result(pred4)
+    assert isinstance(r4.revisions, list), f"Expected list, got {type(r4.revisions)}"
+    assert len(r4.revisions) == 1
+
+    # "None" revision is filtered out
+    pred5 = SimpleNamespace(
+        harmony=8, rhythm=8, arrangement=8, production=8,
+        harmony_reason="", rhythm_reason="", arrangement_reason="", production_reason="",
+        revisions=["None — composition approved"],
+    )
+    r5 = structured_prediction_to_result(pred5)
+    assert r5.revisions == [], f"'None' revision should be filtered, got {r5.revisions}"
+
+
+def test_critique_code_inline():
+    """critique_code_inline annotates code with // IDEA: comments."""
+    from rlm_strudel.critic import critique_code_inline
+
+    # Muffled lpf on non-bass layer gets IDEA comment
+    code_muffled = 'note("c3 e3 g3").s("sawtooth").lpf(400).gain(0.4)'
+    result = critique_code_inline(code_muffled)
+    assert "// IDEA:" in result, f"Expected IDEA comment for muffled lpf, got: {result}"
+
+    # Clean code has no per-line IDEA comments
+    code_clean = 'note("c3 e3 g3").s("sawtooth").lpf(900).gain(0.4).delay(0.2)'
+    result_clean = critique_code_inline(code_clean)
+    for line in result_clean.splitlines():
+        if line.startswith("//"):
+            continue  # structural comments at top are fine
+        assert "// IDEA:" not in line, f"Unexpected per-line IDEA in clean code: {line}"
+
+    # Existing IDEA comments are stripped before re-analysis
+    code_existing = 'note("c3").s("sawtooth").lpf(900).gain(0.4)  // IDEA: old suggestion'
+    result_stripped = critique_code_inline(code_existing)
+    assert "old suggestion" not in result_stripped, f"Old IDEA should be stripped: {result_stripped}"
+
+    # Missing delay triggers IDEA-BIG structural comment
+    code_no_delay = 'note("c3 e3 g3").s("sawtooth").lpf(900).gain(0.4)'
+    result_delay = critique_code_inline(code_no_delay)
+    assert "// IDEA-BIG:" in result_delay, f"Expected IDEA-BIG for missing delay: {result_delay}"
+    assert "delay" in result_delay.lower()
+
+
+def test_single_critic_signature():
+    """CriticSignature has typed output fields and the full rubric is used."""
+    import dspy
+    from rlm_strudel.critic import CriticSignature, CRITIC_RUBRIC
+    # Verify typed output fields exist
+    output_names = list(CriticSignature.output_fields.keys())
+    for field in ("harmony", "rhythm", "arrangement", "production", "revisions"):
+        assert field in output_names, f"Missing output field '{field}' in CriticSignature: {output_names}"
+    # Verify there is no separate CriticStructuredSignature
+    import rlm_strudel.critic as critic_mod
+    assert not hasattr(critic_mod, "CriticStructuredSignature"), "CriticStructuredSignature should be removed"
+    assert not hasattr(critic_mod, "CRITIC_STRUCTURED_INSTRUCTIONS"), "CRITIC_STRUCTURED_INSTRUCTIONS should be removed"
+
+
+def test_compose_section_signature():
+    """ComposeSectionSignature has the expected fields."""
+    from rlm_strudel.rlm_runner import ComposeSectionSignature
+    input_names = list(ComposeSectionSignature.input_fields.keys())
+    output_names = list(ComposeSectionSignature.output_fields.keys())
+    for field in ("prompt", "previous_code", "brief", "tempo_cpm", "forbidden", "sounds"):
+        assert field in input_names, f"Missing input field '{field}': {input_names}"
+    assert "strudel_code" in output_names, f"Missing output field 'strudel_code': {output_names}"
+
+
+def test_finalize_signature_consolidated():
+    """FinalizeCompositionSignature uses reference_context instead of separate ref fields."""
+    from rlm_strudel.rlm_runner import FinalizeCompositionSignature
+    input_names = list(FinalizeCompositionSignature.input_fields.keys())
+    assert "reference_context" in input_names, f"Missing 'reference_context': {input_names}"
+    for removed in ("genres", "effects", "examples", "api", "forbidden", "mood_keywords", "texture_keywords"):
+        assert removed not in input_names, f"'{removed}' should be consolidated, still in: {input_names}"
+
+
+def test_mix_priorities_referenced():
+    """MIX_PRIORITIES is referenced in ORCHESTRATOR_INSTRUCTIONS."""
+    from rlm_strudel.rlm_runner import MIX_PRIORITIES, ORCHESTRATOR_INSTRUCTIONS
+    assert "GAIN HIERARCHY" in MIX_PRIORITIES, "MIX_PRIORITIES missing gain hierarchy"
+    assert "GAIN HIERARCHY" in ORCHESTRATOR_INSTRUCTIONS, "ORCHESTRATOR_INSTRUCTIONS should include MIX_PRIORITIES"
+
+
+def test_build_reference_context():
+    """_build_reference_context consolidates sections into a single string."""
+    from rlm_strudel.rlm_runner import _build_reference_context
+    ctx = {
+        "forbidden": "No .bank() calls",
+        "sounds": "bd sd hh",
+        "api": "note() s()",
+        "effects": "Lo-fi: .lpf(800)",
+        "genres": "Hip Hop pattern",
+        "examples": "stack(s('bd')).play()",
+    }
+    result = _build_reference_context(ctx)
+    assert "FORBIDDEN" in result, "Missing FORBIDDEN header"
+    assert "SOUNDS" in result, "Missing SOUNDS header"
+    assert "No .bank() calls" in result, "Missing forbidden content"
+    assert "bd sd hh" in result, "Missing sounds content"
+
+
 if __name__ == "__main__":
     print("\n=== Integration Tests: v3 Pipeline ===")
     run_test("test_imports", test_imports)
@@ -283,6 +515,10 @@ if __name__ == "__main__":
     run_test("test_critic_pipeline", test_critic_pipeline)
     run_test("test_run_function_signature", test_run_function_signature)
     run_test("test_extract_context_sections", test_extract_context_sections)
+    run_test("test_build_lofi_context_sections", test_build_lofi_context_sections)
+    run_test("test_normalize_lofi_brief", test_normalize_lofi_brief)
+    run_test("test_composition_shape_issues_complete", test_composition_shape_issues_complete)
+    run_test("test_composition_shape_issues_partial", test_composition_shape_issues_partial)
     run_test("test_validate_semantic", test_validate_semantic)
     run_test("test_orchestrator_no_explore_step", test_orchestrator_no_explore_step)
     run_test("test_extract_section_code_raw_lines", test_extract_section_code_raw_lines)
@@ -293,6 +529,13 @@ if __name__ == "__main__":
     run_test("test_identify_flagged_sections", test_identify_flagged_sections)
     run_test("test_critic_slash5_reason_parsing", test_critic_slash5_reason_parsing)
     run_test("test_critic_with_revisions", test_critic_with_revisions)
+    run_test("test_structured_prediction_to_result", test_structured_prediction_to_result)
+    run_test("test_critique_code_inline", test_critique_code_inline)
+    run_test("test_single_critic_signature", test_single_critic_signature)
+    run_test("test_compose_section_signature", test_compose_section_signature)
+    run_test("test_finalize_signature_consolidated", test_finalize_signature_consolidated)
+    run_test("test_mix_priorities_referenced", test_mix_priorities_referenced)
+    run_test("test_build_reference_context", test_build_reference_context)
     print(f"\n{'='*40}")
     print(f"  {passed} passed, {failed} failed")
     if failed:

@@ -1,8 +1,11 @@
 """Curated reference compositions tagged with genre, tempo, and key techniques.
 
-Provides select_references() to match user queries to the most relevant examples,
-and format_references_for_prompt() to render them for inclusion in composer prompts.
+The active pipeline now focuses on lo-fi hip hop, so select_references() narrows
+to the lo-fi subset and prefers arranged examples when the query asks for song
+structure. The broader library remains available for future experiments.
 """
+
+import re
 
 REFERENCES: list[dict] = [
     # 1. Lo-fi Chill Beat
@@ -456,38 +459,62 @@ stack(
 ]
 
 
+PRIMARY_GENRE = "lo-fi hip hop"
+
+
+def _is_lofi_reference(ref: dict) -> bool:
+    tags = {tag.lower() for tag in ref["genre_tags"]}
+    return "lo-fi" in tags and "hip hop" in tags
+
+
+def _prefers_arranged_reference(query: str) -> bool:
+    lowered = query.lower()
+    return any(
+        token in lowered
+        for token in ("arrange", "arranged", "song", "section", "chorus", "verse", "intro", "outro")
+    )
+
+
+def lofi_references() -> list[dict]:
+    """Return the curated reference pack used by the lo-fi pipeline."""
+    return [ref for ref in REFERENCES if _is_lofi_reference(ref)]
+
+
 def select_references(query: str, n: int = 5) -> list[dict]:
-    """Score each reference by counting genre_tag matches against query words.
+    """Return the top lo-fi references for the query.
 
-    Returns the top N references sorted by match score (descending).
-    Falls back to a diverse set of defaults if no tags match the query.
+    Song-structure language boosts arranged examples. Otherwise, loop-oriented
+    references come first to keep the prompt focused and compact.
     """
-    query_words = set(query.lower().split())
+    pool = lofi_references()
+    if not pool:
+        return REFERENCES[:n]
 
-    scored = []
-    for ref in REFERENCES:
+    query_words = set(re.findall(r"[a-z0-9-]+", query.lower()))
+    arranged_bias = 3 if _prefers_arranged_reference(query) else 0
+
+    scored: list[tuple[int, dict]] = []
+    for ref in pool:
         score = 0
-        for tag in ref["genre_tags"]:
-            # Each tag can be multi-word (e.g. "hip hop", "drum and bass")
-            tag_words = set(tag.lower().split())
-            # Count how many query words appear in this tag
-            matches = len(query_words & tag_words)
-            if matches > 0:
-                score += matches
+        tags = {tag.lower() for tag in ref["genre_tags"]}
+        techniques = {tech.lower() for tech in ref["techniques"]}
+        name_words = set(re.findall(r"[a-z0-9-]+", ref["name"].lower()))
+        annotation_words = set(re.findall(r"[a-z0-9-]+", ref["annotation"].lower()))
+
+        score += len(query_words & tags) * 4
+        score += len(query_words & techniques) * 2
+        score += len(query_words & name_words)
+        score += len(query_words & annotation_words)
+
+        if arranged_bias and "arranged" in tags:
+            score += arranged_bias
+        if not arranged_bias and "arranged" not in tags:
+            score += 1
+
         scored.append((score, ref))
 
-    # Sort by score descending, then by original order for stability
-    scored.sort(key=lambda x: x[0], reverse=True)
-
-    top = [ref for score, ref in scored[:n] if score > 0]
-
-    if not top:
-        # Fallback: return a diverse set spanning different genres
-        diverse_indices = [0, 2, 5, 8, 14]  # lo-fi, techno, dnb, bossa, ambient
-        fallback = [REFERENCES[i] for i in diverse_indices if i < len(REFERENCES)]
-        return fallback[:n]
-
-    return top
+    scored.sort(key=lambda item: item[0], reverse=True)
+    return [ref for _score, ref in scored[:n]]
 
 
 def format_references_for_prompt(refs: list[dict]) -> str:

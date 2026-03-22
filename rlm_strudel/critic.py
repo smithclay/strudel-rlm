@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 import dspy
 
@@ -78,7 +79,7 @@ CRITICAL: Use 1-10 scale. Write "7/10" NOT "3.5/5". Cite code evidence for every
 """
 
 # ---------------------------------------------------------------------------
-# DSPy Signature
+# DSPy Signature — single critic with typed outputs and the full rubric
 # ---------------------------------------------------------------------------
 
 
@@ -87,7 +88,15 @@ class CriticSignature(dspy.Signature):
 
     query: str = dspy.InputField(desc="The original user request / music prompt")
     strudel_code: str = dspy.InputField(desc="The Strudel code to evaluate")
-    evaluation: str = dspy.OutputField(desc="Rubric scores and revision suggestions")
+    harmony: int = dspy.OutputField(desc="Harmony score from 1 to 10")
+    harmony_reason: str = dspy.OutputField(desc="Code-cited reason for the harmony score")
+    rhythm: int = dspy.OutputField(desc="Rhythm score from 1 to 10")
+    rhythm_reason: str = dspy.OutputField(desc="Code-cited reason for the rhythm score")
+    arrangement: int = dspy.OutputField(desc="Arrangement score from 1 to 10")
+    arrangement_reason: str = dspy.OutputField(desc="Code-cited reason for the arrangement score")
+    production: int = dspy.OutputField(desc="Production score from 1 to 10")
+    production_reason: str = dspy.OutputField(desc="Code-cited reason for the production score")
+    revisions: list[str] = dspy.OutputField(desc="Concrete revision fixes with [section] prefixes; empty list if all scores >= 7")
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +125,7 @@ class CriticResult:
 
     @property
     def approved(self) -> bool:
-        return self.average >= 8.0 and self.min_score >= 7
+        return self.min_score >= 7
 
     def format_feedback(self) -> str:
         lines = [
@@ -362,9 +371,157 @@ def parse_critic_output(text: str) -> CriticResult:
     )
 
 
+def _clamp_score(value, default: int = 5) -> int:
+    try:
+        score = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(10, score))
+
+
+def _normalize_revisions(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        items = [value]
+    else:
+        items = [str(item) for item in value]
+    cleaned = [item.strip() for item in items if str(item).strip()]
+    if cleaned and cleaned[0].lower().startswith("none"):
+        return []
+    return cleaned
+
+
+def structured_prediction_to_result(result) -> CriticResult:
+    """Convert a typed DSPy prediction into a CriticResult."""
+    return CriticResult(
+        harmony=_clamp_score(getattr(result, "harmony", 5)),
+        rhythm=_clamp_score(getattr(result, "rhythm", 5)),
+        arrangement=_clamp_score(getattr(result, "arrangement", 5)),
+        production=_clamp_score(getattr(result, "production", 5)),
+        reasons={
+            "harmony": str(getattr(result, "harmony_reason", "") or "").strip(),
+            "rhythm": str(getattr(result, "rhythm_reason", "") or "").strip(),
+            "arrangement": str(getattr(result, "arrangement_reason", "") or "").strip(),
+            "production": str(getattr(result, "production_reason", "") or "").strip(),
+        },
+        revisions=_normalize_revisions(getattr(result, "revisions", [])),
+    )
+
+
 # ---------------------------------------------------------------------------
-# Mechanical production analysis
+# Mechanical production analysis — shared detection layer
 # ---------------------------------------------------------------------------
+
+
+class LineFinding(NamedTuple):
+    """A per-line issue found by mechanical analysis."""
+    line_idx: int
+    message: str
+
+
+def _analyze_lines(code: str) -> tuple[list[LineFinding], list[str], int]:
+    """Shared detection logic for mechanical production analysis.
+
+    Returns:
+        line_findings: per-line issues with line index and message
+        structural: whole-composition issues (not tied to a single line)
+        max_layers: layer count of the densest section (0 if none detected)
+    """
+    lines = code.splitlines()
+    line_findings: list[LineFinding] = []
+    structural: list[str] = []
+
+    # --- Per-line checks ---
+    total_room_count = len(re.findall(r'\.room\(', code))
+    room_seen = 0
+
+    for idx, line in enumerate(lines):
+        # LPF checks — creative nudges, not error reports
+        for m in re.finditer(r'\.lpf\((\d+)\)', line):
+            val = int(m.group(1))
+            is_bass = bool(re.search(r'(?:bass|jvbass|"sine")', line, re.IGNORECASE)) and \
+                      bool(re.search(r'note\(".*?[0-2]"?\)', line))
+            if is_bass and val < 200:
+                line_findings.append(LineFinding(idx, "this bass is all sub — give it some teeth with sawtooth + lpf(300-400) so it translates on small speakers"))
+            elif not is_bass:
+                if val < 700:
+                    line_findings.append(LineFinding(idx, f"this layer is hiding behind lpf({val}) — let it breathe, open the filter to 700-1200 so the mid-range sings"))
+                elif val > 2000:
+                    line_findings.append(LineFinding(idx, f"lpf({val}) is wide open — could get harsh in the mix, try 700-1200 for warmth with presence"))
+
+        # Gain checks
+        for m in re.finditer(r'\.gain\(([\d.]+)\)', line):
+            g = float(m.group(1))
+            is_melodic = bool(re.search(r'note\(|\.s\("(?:sawtooth|triangle|square)"', line))
+            if g < 0.15:
+                line_findings.append(LineFinding(idx, f"gain({g}) — this voice is whispering, bring it up to at least 0.15 so it's part of the conversation"))
+            elif is_melodic and g < 0.35:
+                line_findings.append(LineFinding(idx, f"gain({g}) on a melodic layer — this should be a lead voice, not background, try 0.3-0.5"))
+
+        # Room check — flag .room() on 4th+ layer when total > 6
+        if '.room(' in line:
+            room_seen += 1
+            if total_room_count > 6 and room_seen >= 4:
+                line_findings.append(LineFinding(idx, "reverb on everything washes out the depth — pick 1-3 layers that deserve the space and let the rest stay dry"))
+
+    # --- Structural suggestions ---
+    has_delay = bool(re.search(r'\.delay\(', code))
+    if not has_delay:
+        structural.append("No delay anywhere — delay is the secret weapon for depth and groove, try it on a chord or percussion layer")
+
+    has_repetition = bool(re.search(r'\[.*?verse\].*\[.*?chorus\].*\[.*?verse\]', code, re.DOTALL))
+    if not has_repetition:
+        structural.append("No verse-chorus repetition — repeating sections lets the listener lock in and feel the groove build")
+
+    # Layer count per section
+    sections = re.split(r'const\s+\w+\s*=\s*stack\s*\(', code)
+    max_layers = 0
+    for section in sections:
+        layer_count = section.count('\n  s(') + section.count('\n  note(') + section.count('\ns(') + section.count('\nnote(')
+        max_layers = max(max_layers, layer_count)
+    if max_layers > 8:
+        structural.append(f"~{max_layers} layers competing — a tight 5-7 layer mix has more punch than a crowded 10, each voice gets room to speak")
+
+    return line_findings, structural, max_layers
+
+
+def critique_code_inline(code: str) -> str:
+    """Return code with inline ``// IDEA:`` comments suggesting creative improvements.
+
+    Strips any existing ``// IDEA`` / ``// CRITIC`` comments first to avoid
+    accumulation, then appends per-line suggestions and prepends structural ideas.
+    """
+    # Strip existing annotations (both old CRITIC and new IDEA format)
+    stripped_lines: list[str] = []
+    for line in code.splitlines():
+        cleaned = re.sub(r'\s*//\s*(?:CRITIC(?:-STRUCTURAL)?|IDEA(?:-BIG)?):.*$', '', line)
+        stripped_lines.append(cleaned)
+
+    line_findings, structural, _max_layers = _analyze_lines("\n".join(stripped_lines))
+
+    # Build index of findings per line
+    findings_by_line: dict[int, list[str]] = {}
+    for lf in line_findings:
+        findings_by_line.setdefault(lf.line_idx, []).append(lf.message)
+
+    # Annotate lines
+    result_lines: list[str] = []
+
+    # Prepend structural ideas as a block
+    for s in structural:
+        result_lines.append(f"// IDEA-BIG: {s}")
+    if structural:
+        result_lines.append("")
+
+    for idx, line in enumerate(stripped_lines):
+        if idx in findings_by_line:
+            comments = "; ".join(findings_by_line[idx])
+            result_lines.append(f"{line}  // IDEA: {comments}")
+        else:
+            result_lines.append(line)
+
+    return "\n".join(result_lines)
 
 
 def analyze_production(code: str) -> str:
@@ -373,74 +530,44 @@ def analyze_production(code: str) -> str:
     Returns a text block suitable for injection into the critic prompt so the
     LLM can't overlook concrete issues like muffled filters or inaudible gains.
     """
+    line_findings, structural, max_layers = _analyze_lines(code)
+
     findings: list[str] = []
 
-    # --- LPF analysis (separate bass vs non-bass layers) ---
-    bass_lpfs: list[int] = []
-    nonbass_lpfs: list[int] = []
-    for line in code.splitlines():
-        lpf_matches = re.findall(r'\.lpf\((\d+)\)', line)
-        if not lpf_matches:
-            continue
-        is_bass = bool(re.search(r'(?:bass|jvbass|"sine")', line, re.IGNORECASE)) and \
-                  bool(re.search(r'note\(".*?[0-2]"?\)', line))
-        for v in lpf_matches:
-            val = int(v)
-            if is_bass:
-                bass_lpfs.append(val)
-            else:
-                nonbass_lpfs.append(val)
+    # Flatten per-line findings into summary text
+    # Group similar issues rather than listing every line
+    lpf_muffled = [lf for lf in line_findings if "hiding behind lpf(" in lf.message]
+    lpf_harsh = [lf for lf in line_findings if "could get harsh" in lf.message]
+    sine_bass = [lf for lf in line_findings if "bass is all sub" in lf.message]
+    gain_inaudible = [lf for lf in line_findings if "voice is whispering" in lf.message]
+    gain_quiet = [lf for lf in line_findings if "melodic layer" in lf.message]
+    room_excess = [lf for lf in line_findings if "washes out the depth" in lf.message]
 
-    if nonbass_lpfs:
-        max_nonbass = max(nonbass_lpfs)
-        if max_nonbass < 700:
-            findings.append(f"PROBLEM: All non-bass layers have lpf <= {max_nonbass}Hz — mix sounds muffled. Chords need lpf 700-1200.")
-        elif max_nonbass > 2000:
-            findings.append(f"WARNING: Non-bass lpf goes up to {max_nonbass}Hz — may sound harsh. Sweet spot is 700-1200 for chords.")
-
-    # --- Bass synth choice ---
-    sine_bass = bool(re.search(r'"sine".*?\.lpf\(\d{2,3}\)', code))
-    saw_bass = bool(re.search(r'"sawtooth".*?\.lpf\([234]\d\d\)', code))
-    if sine_bass and not saw_bass:
+    if lpf_muffled:
+        vals = re.findall(r'lpf\((\d+)\)', " ".join(lf.message for lf in lpf_muffled))
+        max_val = max(int(v) for v in vals) if vals else 0
+        findings.append(f"PROBLEM: All non-bass layers have lpf <= {max_val}Hz — mix sounds muffled. Chords need lpf 700-1200.")
+    if lpf_harsh:
+        vals = re.findall(r'lpf\((\d+)\)', " ".join(lf.message for lf in lpf_harsh))
+        max_val = max(int(v) for v in vals) if vals else 0
+        findings.append(f"WARNING: Non-bass lpf goes up to {max_val}Hz — may sound harsh. Sweet spot is 700-1200 for chords.")
+    if sine_bass:
         findings.append("NOTE: Bass uses sine — lacks harmonics. Sawtooth with lpf(300-400) translates better on all speakers.")
+    if gain_inaudible:
+        findings.append(f"PROBLEM: {len(gain_inaudible)} layer(s) with gain < 0.15 — inaudible.")
+    if gain_quiet:
+        findings.append(f"PROBLEM: All melodic/harmonic layers have gain too quiet — needs 0.3-0.5.")
+    if room_excess:
+        findings.append(f"WARNING: .room() on too many layers — too much reverb muddies the mix. Use on 1-3 layers.")
 
-    # --- Gain analysis ---
-    gains: list[float] = [float(g) for g in re.findall(r'\.gain\(([\d.]+)\)', code)]
-    if gains:
-        very_quiet = [g for g in gains if g < 0.15]
-        if very_quiet:
-            findings.append(f"PROBLEM: {len(very_quiet)} layer(s) with gain < 0.15 — inaudible.")
-        melodic_gains: list[float] = []
-        for line in code.splitlines():
-            if 'note(' in line or '.s("sawtooth")' in line or '.s("triangle")' in line or '.s("square")' in line:
-                for g in re.findall(r'\.gain\(([\d.]+)\)', line):
-                    melodic_gains.append(float(g))
-        if melodic_gains and max(melodic_gains) < 0.35:
-            findings.append(f"PROBLEM: All melodic/harmonic layers have gain <= {max(melodic_gains)} — too quiet.")
-
-    # --- Effects analysis (less is more) ---
-    has_delay = bool(re.search(r'\.delay\(', code))
-    if not has_delay:
-        findings.append("MISSING: No .delay() — delay is the primary depth/space effect.")
-
-    room_count = len(re.findall(r'\.room\(', code))
-    if room_count > 6:
-        findings.append(f"WARNING: .room() on {room_count} layers — too much reverb muddies the mix. Use on 1-3 layers.")
-
-    # --- Layer count per section ---
-    # Count layers in the densest section
-    sections = re.split(r'const\s+\w+\s*=\s*stack\s*\(', code)
-    max_layers = 0
-    for section in sections:
-        layer_count = section.count('\n  s(') + section.count('\n  note(') + section.count('\ns(') + section.count('\nnote(')
-        max_layers = max(max_layers, layer_count)
-    if max_layers > 8:
-        findings.append(f"WARNING: Densest section has ~{max_layers} layers — too many competing elements. 5-7 is the sweet spot.")
-
-    # --- Structure check ---
-    has_repetition = bool(re.search(r'\[.*?verse\].*\[.*?chorus\].*\[.*?verse\]', code, re.DOTALL))
-    if not has_repetition:
-        findings.append("NOTE: No verse-chorus repetition detected. Repeating sections improves musical coherence.")
+    # Structural findings
+    for s in structural:
+        if "delay" in s.lower():
+            findings.append("MISSING: No .delay() — delay is the primary depth/space effect.")
+        elif "repetition" in s.lower():
+            findings.append("NOTE: No verse-chorus repetition detected. Repeating sections improves musical coherence.")
+        elif "layers" in s.lower():
+            findings.append(f"WARNING: Densest section has {max_layers} layers — too many competing elements. 5-7 is the sweet spot.")
 
     if not findings:
         return "CODE ANALYSIS: No production issues detected."
@@ -467,8 +594,27 @@ class StrudelCritic:
 
         # Use low temperature for consistent scoring (LLM-as-judge best practice)
         with dspy.context(lm=dspy.settings.lm.copy(temperature=0.0)):
-            result = self.predict(query=query, strudel_code=augmented_code)
-        logger.info(f"[critic raw output] {result.evaluation[:500]}")
+            try:
+                result = self.predict(query=query, strudel_code=augmented_code)
+                parsed = structured_prediction_to_result(result)
+                logger.info(
+                    "[critic] H=%s R=%s A=%s P=%s revisions=%s",
+                    parsed.harmony,
+                    parsed.rhythm,
+                    parsed.arrangement,
+                    parsed.production,
+                    len(parsed.revisions),
+                )
+                return parsed
+            except Exception as exc:
+                logger.warning(f"[critic] Structured extraction failed, retrying with text fallback: {exc}")
+
+        # Fallback: re-run with a text-only output and parse with regex
+        with dspy.context(lm=dspy.settings.lm.copy(temperature=0.0)):
+            fallback_predict = dspy.Predict("query, strudel_code -> evaluation")
+            result = fallback_predict(query=query, strudel_code=augmented_code)
+
+        logger.info(f"[critic fallback] {result.evaluation[:500]}")
         parsed = parse_critic_output(result.evaluation)
-        logger.info(f"[critic parsed] {parsed}")
+        logger.info(f"[critic fallback parsed] {parsed}")
         return parsed

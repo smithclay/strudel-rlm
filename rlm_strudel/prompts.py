@@ -55,6 +55,38 @@ def extract_context_sections(context: str) -> dict[str, str]:
     return sections
 
 
+def extract_markdown_subsection(section: str, heading: str) -> str:
+    """Extract a markdown subsection headed by ``### {heading}``."""
+    pattern = rf"(### {re.escape(heading)}.*?)(?=\n### |\Z)"
+    match = re.search(pattern, section, re.DOTALL)
+    return match.group(1).strip() if match else ""
+
+
+def build_lofi_context_sections(context: str) -> dict[str, str]:
+    """Return context sections trimmed to the repo's primary lo-fi hip hop lane."""
+    sections = extract_context_sections(context)
+
+    genre_parts = [
+        extract_markdown_subsection(sections.get("genres", ""), "Hip Hop"),
+        extract_markdown_subsection(sections.get("genres", ""), "Lo-fi Hip Hop"),
+    ]
+    effect_parts = [
+        extract_markdown_subsection(sections.get("effects", ""), "Lo-fi Sound"),
+        extract_markdown_subsection(sections.get("effects", ""), "Warm Analog"),
+        extract_markdown_subsection(sections.get("effects", ""), "Underwater / Muffled"),
+    ]
+
+    selected_genres = "\n\n".join(part for part in genre_parts if part)
+    selected_effects = "\n\n".join(part for part in effect_parts if part)
+
+    if selected_genres:
+        sections["genres"] = "## Genre Pattern Library\n\n" + selected_genres
+    if selected_effects:
+        sections["effects"] = "## Effects Recipes\n\n" + selected_effects
+
+    return sections
+
+
 STRUDEL_CONTEXT = """
 # Strudel Live Coding Reference
 

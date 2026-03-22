@@ -16,38 +16,34 @@ def test_references_not_empty():
 
 
 def test_select_matching_query():
-    """'dark ambient industrial' should return dark/ambient refs."""
-    results = select_references("dark ambient industrial", n=5)
+    """Song-structured queries should return lo-fi refs and include arranged examples."""
+    results = select_references("study beat with intro verse chorus outro", n=5)
     assert len(results) > 0, "Expected at least one result"
     names = [r["name"] for r in results]
-    # The Dark Synth Atmosphere or Ambient Dreamscape should be in results
-    has_dark_or_ambient = any(
-        "dark" in name.lower() or "ambient" in name.lower() for name in names
-    )
-    assert has_dark_or_ambient, f"Expected dark/ambient refs, got: {names}"
+    assert all("lo-fi" in r["genre_tags"] for r in results), f"Expected lo-fi refs, got: {results}"
+    has_arranged = any("arranged" in r["genre_tags"] for r in results)
+    assert has_arranged, f"Expected an arranged lo-fi ref, got: {names}"
     print(f"PASS: test_select_matching_query (returned: {names})")
 
 
 def test_select_fallback():
-    """Nonsense query returns 5 diverse defaults."""
+    """Nonsense query still returns the stable lo-fi reference pack."""
     results = select_references("xyzzy flurble nonsense", n=5)
-    assert len(results) == 5, f"Expected 5 fallback results, got {len(results)}"
+    assert len(results) >= 2, f"Expected lo-fi fallback results, got {len(results)}"
     names = [r["name"] for r in results]
-    # Should be diverse — check that not all are the same genre
-    all_tags = set()
-    for r in results:
-        all_tags.update(r["genre_tags"])
-    assert len(all_tags) >= 5, f"Expected diverse fallback, got tags: {all_tags}"
+    assert all("lo-fi" in r["genre_tags"] for r in results), f"Expected lo-fi fallback, got: {results}"
+    assert all("hip hop" in r["genre_tags"] for r in results), f"Expected hip hop fallback, got: {results}"
     print(f"PASS: test_select_fallback (returned: {names})")
 
 
 def test_format_output():
     """Formatted output contains 'Reference 1:' and code blocks."""
-    refs = select_references("techno", n=3)
+    refs = select_references("study beat", n=3)
     output = format_references_for_prompt(refs)
     assert "Reference 1:" in output, "Expected 'Reference 1:' in output"
     assert "```" in output, "Expected code blocks in output"
     assert ".play()" in output, "Expected .play() in code blocks"
+    assert "Lo-fi" in output or "hip hop" in output, "Expected lo-fi labeling in output"
     print("PASS: test_format_output")
 
 

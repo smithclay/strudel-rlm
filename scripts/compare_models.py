@@ -4,17 +4,28 @@ Runs the same musical prompt through several models, collects critic scores,
 and prints a side-by-side comparison table. Optionally records audio and
 scores it via the bergain CE judge (audiobox_aesthetics).
 
+Experiment harness features:
+    --repeat N       Run each model×query combo N times for statistical power
+    --tag TAG        Label experiment configs (e.g., "baseline", "new-prompt-v1")
+    --csv PATH       Append results to CSV for longitudinal analysis
+    --analyze PATH   Analyze accumulated CSV for feature-CE correlations
+
 Usage:
     uv run python scripts/compare_models.py "lo-fi hip hop beats to study to"
     uv run python scripts/compare_models.py "dark ambient drone" --save-code
     uv run python scripts/compare_models.py "techno banger" --record 10 --judge
     uv run python scripts/compare_models.py --judge-existing library/*.wav
+    uv run python scripts/compare_models.py "dub reggae" --repeat 5 --record 30 --judge --tag baseline --csv library/experiment.csv
+    uv run python scripts/compare_models.py --analyze library/experiment.csv
 """
 
 import argparse
+import csv
 import glob
 import json
+import math
 import os
+import re
 import sys
 import time
 import functools
@@ -120,6 +131,71 @@ def find_latest_wav(prefix_hint: str = "") -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Code feature extraction for CE correlation analysis
+# ---------------------------------------------------------------------------
+
+def extract_code_features(code: str) -> dict:
+    """Extract mechanical features from Strudel code for CE correlation analysis."""
+    lines = code.splitlines()
+
+    all_lpfs, bass_lpfs, nonbass_lpfs = [], [], []
+    all_gains, melodic_gains = [], []
+
+    for line in lines:
+        for m in re.finditer(r'\.lpf\((\d+)\)', line):
+            val = int(m.group(1))
+            is_bass = bool(re.search(r'(?:bass|jvbass|"sine")', line, re.I)) and \
+                      bool(re.search(r'note\(".*?[0-2]"?\)', line))
+            all_lpfs.append(val)
+            (bass_lpfs if is_bass else nonbass_lpfs).append(val)
+        for m in re.finditer(r'\.gain\(([\d.]+)\)', line):
+            g = float(m.group(1))
+            all_gains.append(g)
+            if re.search(r'note\(|\.s\("(?:sawtooth|triangle|square)"', line):
+                melodic_gains.append(g)
+
+    section_names = re.findall(r'const\s+(\w+)\s*=\s*stack', code)
+    sections = re.split(r'const\s+\w+\s*=\s*stack\s*\(', code)
+    max_layers = 0
+    for s in sections[1:]:
+        lc = s.count('\n  s(') + s.count('\n  note(') + s.count('\ns(') + s.count('\nnote(')
+        max_layers = max(max_layers, lc)
+
+    cpm_match = re.search(r'\.cpm\((\d+)\)', code)
+
+    return {
+        "layer_count_max": max_layers,
+        "section_count": len(section_names),
+        "lpf_max_nonbass": max(nonbass_lpfs) if nonbass_lpfs else 0,
+        "lpf_min_nonbass": min(nonbass_lpfs) if nonbass_lpfs else 0,
+        "lpf_mean_nonbass": round(sum(nonbass_lpfs) / len(nonbass_lpfs), 1) if nonbass_lpfs else 0,
+        "gain_mean": round(sum(all_gains) / len(all_gains), 3) if all_gains else 0,
+        "gain_range": round(max(all_gains) - min(all_gains), 3) if len(all_gains) > 1 else 0,
+        "gain_melodic_max": max(melodic_gains) if melodic_gains else 0,
+        "bass_type": "sawtooth" if re.search(r'"sawtooth".*note\(".*?[0-2]', code) else
+                     "sine" if re.search(r'"sine".*note\(".*?[0-2]', code) else "other",
+        "has_delay": bool(re.search(r'\.delay\(', code)),
+        "delay_count": len(re.findall(r'\.delay\(', code)),
+        "room_count": len(re.findall(r'\.room\(', code)),
+        "has_arrange": bool(re.search(r'arrange\(', code)),
+        "has_repetition": bool(re.search(r'\[.*?verse\].*\[.*?chorus\].*\[.*?verse\]', code, re.DOTALL)),
+        "unique_sounds": len(set(re.findall(r's\("(\w+)"', code))),
+        "code_length": len(code),
+        "cpm": int(cpm_match.group(1)) if cpm_match else 0,
+    }
+
+
+# Feature keys in consistent order for CSV output
+FEATURE_KEYS = [
+    "layer_count_max", "section_count",
+    "lpf_max_nonbass", "lpf_min_nonbass", "lpf_mean_nonbass",
+    "gain_mean", "gain_range", "gain_melodic_max",
+    "bass_type", "has_delay", "delay_count", "room_count",
+    "has_arrange", "has_repetition", "unique_sounds", "code_length", "cpm",
+]
+
+
+# ---------------------------------------------------------------------------
 # Run one model and collect results
 # ---------------------------------------------------------------------------
 
@@ -218,6 +294,8 @@ def run_single_model(
 
         browser.shutdown()
 
+        features = extract_code_features(code) if code else {}
+
         return {
             "model": model_id,
             "status": "ok",
@@ -228,6 +306,7 @@ def run_single_model(
             "wav_path": wav_path,
             "feedback": feedback,
             "elapsed_s": round(elapsed, 1),
+            "features": features,
         }
 
     except Exception as e:
@@ -242,6 +321,7 @@ def run_single_model(
             "wav_path": None,
             "feedback": "",
             "elapsed_s": round(elapsed, 1),
+            "features": {},
         }
 
 
@@ -349,6 +429,170 @@ def save_results(results: list[dict], query: str, output_dir: str):
 
 
 # ---------------------------------------------------------------------------
+# CSV accumulation
+# ---------------------------------------------------------------------------
+
+CSV_COLUMNS = [
+    "timestamp", "tag", "model", "query", "run", "status",
+    "harmony", "rhythm", "arrangement", "production", "critic_avg",
+    "CE", "PQ", "elapsed_s",
+] + FEATURE_KEYS
+
+
+def append_to_csv(csv_path: str, results: list[dict], query: str, tag: str):
+    """Append result rows to a CSV file, creating it with headers if new."""
+    file_exists = os.path.isfile(csv_path)
+    with open(csv_path, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        if not file_exists:
+            writer.writeheader()
+        for r in results:
+            scores = r.get("scores", {})
+            ce = r.get("ce_scores") or {}
+            features = r.get("features", {})
+            row = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "tag": tag,
+                "model": r["model"].split("/")[-1],
+                "query": query,
+                "run": r.get("run", 1),
+                "status": r["status"],
+                "harmony": scores.get("harmony", ""),
+                "rhythm": scores.get("rhythm", ""),
+                "arrangement": scores.get("arrangement", ""),
+                "production": scores.get("production", ""),
+                "critic_avg": scores.get("average", ""),
+                "CE": ce.get("CE", ""),
+                "PQ": ce.get("PQ", ""),
+                "elapsed_s": r["elapsed_s"],
+            }
+            for k in FEATURE_KEYS:
+                row[k] = features.get(k, "")
+            writer.writerow(row)
+    print(f"  [csv] Appended {len(results)} row(s) to {csv_path}")
+
+
+# ---------------------------------------------------------------------------
+# Analyze accumulated CSV
+# ---------------------------------------------------------------------------
+
+def _pearson_r(xs: list[float], ys: list[float]) -> tuple[float, float]:
+    """Compute Pearson correlation coefficient and approximate p-value (stdlib only)."""
+    n = len(xs)
+    if n < 3:
+        return 0.0, 1.0
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    sx = math.sqrt(sum((x - mx) ** 2 for x in xs) / (n - 1)) if n > 1 else 0
+    sy = math.sqrt(sum((y - my) ** 2 for y in ys) / (n - 1)) if n > 1 else 0
+    if sx == 0 or sy == 0:
+        return 0.0, 1.0
+    r = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / ((n - 1) * sx * sy)
+    r = max(-1.0, min(1.0, r))
+    # Approximate two-tailed p-value via t-distribution
+    if abs(r) >= 1.0:
+        return r, 0.0
+    t = r * math.sqrt((n - 2) / (1 - r * r))
+    # Rough p-value approximation using normal CDF for large-ish n
+    p = 2 * (1 - 0.5 * (1 + math.erf(abs(t) / math.sqrt(2))))
+    return r, p
+
+
+def analyze_csv(csv_path: str):
+    """Read accumulated CSV and print feature-CE correlation report."""
+    if not os.path.isfile(csv_path):
+        print(f"[error] File not found: {csv_path}")
+        sys.exit(1)
+
+    with open(csv_path, newline="") as f:
+        rows = list(csv.DictReader(f))
+
+    if not rows:
+        print("[error] CSV is empty")
+        sys.exit(1)
+
+    # Filter to rows with CE scores
+    scored = [r for r in rows if r.get("CE") and r["CE"] != ""]
+    print(f"\nCE Score Feature Correlations (N={len(scored)} scored runs, {len(rows)} total)")
+    print("=" * 80)
+
+    if len(scored) < 3:
+        print("  Not enough scored runs for correlation analysis (need >= 3).")
+        print("  Run more experiments with --record and --judge.\n")
+    else:
+        ce_vals = [float(r["CE"]) for r in scored]
+
+        # Numeric features only
+        numeric_features = [k for k in FEATURE_KEYS if k not in ("bass_type",)]
+
+        correlations = []
+        for feat in numeric_features:
+            vals = []
+            ces = []
+            for r, ce in zip(scored, ce_vals):
+                v = r.get(feat, "")
+                if v == "" or v is None:
+                    continue
+                # Convert booleans stored as strings
+                if v in ("True", "False"):
+                    v = 1.0 if v == "True" else 0.0
+                try:
+                    vals.append(float(v))
+                    ces.append(ce)
+                except ValueError:
+                    continue
+            if len(vals) < 3:
+                continue
+            r_val, p_val = _pearson_r(vals, ces)
+            # Quartile split for high/low CE means
+            sorted_pairs = sorted(zip(ces, vals))
+            q = max(1, len(sorted_pairs) // 4)
+            low_mean = sum(v for _, v in sorted_pairs[:q]) / q if q > 0 else 0
+            high_mean = sum(v for _, v in sorted_pairs[-q:]) / q if q > 0 else 0
+            correlations.append((feat, r_val, p_val, high_mean, low_mean))
+
+        correlations.sort(key=lambda x: abs(x[1]), reverse=True)
+
+        print(f"\n{'Feature':<25} {'r':>6} {'p-value':>9}  {'High-CE mean':>13} {'Low-CE mean':>12}")
+        print("-" * 80)
+        for feat, r_val, p_val, high_mean, low_mean in correlations:
+            sig = "*" if p_val < 0.05 else " "
+            print(f"{feat:<25} {r_val:>6.2f} {p_val:>9.3f}{sig} {high_mean:>13.2f} {low_mean:>12.2f}")
+        print("-" * 80)
+        print("  * = p < 0.05\n")
+
+    # Group by tag
+    tags = {}
+    for r in scored:
+        t = r.get("tag", "(none)") or "(none)"
+        tags.setdefault(t, []).append(float(r["CE"]))
+
+    if tags:
+        print("By tag:")
+        for tag, ces in sorted(tags.items()):
+            n = len(ces)
+            mean = sum(ces) / n
+            std = math.sqrt(sum((c - mean) ** 2 for c in ces) / n) if n > 1 else 0
+            print(f"  {tag:<25} N={n:<4} CE mean={mean:.2f}  std={std:.2f}")
+        print()
+
+    # Group by model
+    models = {}
+    for r in scored:
+        m = r.get("model", "unknown")
+        models.setdefault(m, []).append(float(r["CE"]))
+
+    if len(models) > 1:
+        print("By model:")
+        for model, ces in sorted(models.items()):
+            n = len(ces)
+            mean = sum(ces) / n
+            std = math.sqrt(sum((c - mean) ** 2 for c in ces) / n) if n > 1 else 0
+            print(f"  {model:<25} N={n:<4} CE mean={mean:.2f}  std={std:.2f}")
+        print()
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -377,6 +621,11 @@ def main():
     parser.add_argument("--no-server", action="store_true", help="Skip starting the static server")
     parser.add_argument("--url", default="http://127.0.0.1:5173", help="Strudel app URL")
 
+    parser.add_argument("--repeat", type=int, default=1, help="Repeat each model N times (for statistical power)")
+    parser.add_argument("--tag", default="", metavar="TAG", help="Label for this experiment config (e.g., 'baseline', 'new-prompt-v1')")
+    parser.add_argument("--csv", metavar="PATH", help="Append results to CSV for longitudinal analysis")
+    parser.add_argument("--analyze", metavar="CSV", help="Analyze accumulated CSV for feature-CE correlations (skips generation)")
+
     parser.add_argument(
         "--judge-existing", nargs="+", metavar="WAV",
         help="Score existing WAV files via CE judge (skips generation entirely)",
@@ -387,6 +636,11 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Analyze mode — read CSV and print report, then exit
+    if args.analyze:
+        analyze_csv(args.analyze)
+        return
 
     # Score existing files mode — no generation needed
     if args.judge_existing:
@@ -425,7 +679,7 @@ def main():
         return
 
     if not args.query:
-        parser.error("query is required when not using --judge-existing")
+        parser.error("query is required when not using --judge-existing or --analyze")
 
     # Resolve model aliases
     model_ids = []
@@ -444,43 +698,54 @@ def main():
         print(f"Starting static server at {args.url}...")
         server = start_static_server(args.url)
 
+    total_runs = len(model_ids) * args.repeat
     print(f"\nQuery: \"{args.query}\"")
-    print(f"Models: {len(model_ids)}")
+    print(f"Models: {len(model_ids)}  ×  Repeats: {args.repeat}  =  {total_runs} total runs")
+    if args.tag:
+        print(f"Tag: {args.tag}")
     for mid in model_ids:
         print(f"  - {mid}")
     print(f"Settings: max_iters={args.max_iters}, max_debate_rounds={args.max_debate_rounds}")
     print()
 
-    # Run each model sequentially
+    # Run each model × repeat sequentially
     results = []
-    for i, model_id in enumerate(model_ids, 1):
+    run_num = 0
+    for i, model_id in enumerate(model_ids):
         model_short = model_id.split("/")[-1]
-        print(f"\n{'='*60}")
-        print(f"  [{i}/{len(model_ids)}] Running: {model_short}")
-        print(f"{'='*60}\n")
+        for rep in range(1, args.repeat + 1):
+            run_num += 1
+            print(f"\n{'='*60}")
+            print(f"  [{run_num}/{total_runs}] {model_short} run {rep}/{args.repeat}")
+            print(f"{'='*60}\n")
 
-        r = run_single_model(
-            model_id=model_id,
-            query=args.query,
-            max_iters=args.max_iters,
-            max_llm_calls=args.max_llm_calls,
-            max_debate_rounds=args.max_debate_rounds,
-            url=args.url,
-            record_seconds=args.record,
-            judge=args.judge,
-        )
-        results.append(r)
+            r = run_single_model(
+                model_id=model_id,
+                query=args.query,
+                max_iters=args.max_iters,
+                max_llm_calls=args.max_llm_calls,
+                max_debate_rounds=args.max_debate_rounds,
+                url=args.url,
+                record_seconds=args.record,
+                judge=args.judge,
+            )
+            r["run"] = rep
+            results.append(r)
 
-        s = r["scores"]
-        if s:
-            print(f"\n  >> {model_short}: avg={s['average']:.1f} "
-                  f"(H={s['harmony']} R={s['rhythm']} A={s['arrangement']} P={s['production']}) "
-                  f"in {r['elapsed_s']}s")
-        else:
-            print(f"\n  >> {model_short}: {r['status']} in {r['elapsed_s']}s")
+            s = r["scores"]
+            if s:
+                print(f"\n  >> {model_short}: avg={s['average']:.1f} "
+                      f"(H={s['harmony']} R={s['rhythm']} A={s['arrangement']} P={s['production']}) "
+                      f"in {r['elapsed_s']}s")
+            else:
+                print(f"\n  >> {model_short}: {r['status']} in {r['elapsed_s']}s")
 
     # Print comparison table
     print_comparison_table(results, args.query)
+
+    # Append to CSV if requested
+    if args.csv:
+        append_to_csv(args.csv, results, args.query, args.tag)
 
     # Save code if requested
     if args.save_code:
