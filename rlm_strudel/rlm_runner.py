@@ -16,6 +16,23 @@ from rlm_strudel.sanitizer import extract_section_code, sanitize_strudel, valida
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Shared mix standards — single source of truth for gain, lpf, and layer rules
+# ---------------------------------------------------------------------------
+
+MIX_PRIORITIES = """\
+- MINIMAL LAYERS (4-5 per section MAX). Each layer must be essential — kick, bass,
+  chords, one melodic element, one percussion. Fewer voices = clearer mix = more impact.
+  Don't spread gain thin across 6+ layers.
+- MID-RANGE PRESENCE: chords/pads at lpf 700-1200 (not 400, not 2000+). The mid-range
+  carries the musical content — keep it warm and present, not muffled or harsh.
+- BASS WITH HARMONICS: prefer sawtooth lpf(300-400) over sine lpf(150) for bass —
+  sawtooth has overtones that translate on all speakers.
+- DELAY AS PRODUCTION: .delay() with .delayfeedback(0.5-0.7) creates space and depth.
+  This alone is more effective than piling on .room()+.delay()+.pan()+.detune() everywhere.
+- GAIN HIERARCHY: bass 0.7-0.8, chords 0.4-0.6, hats 0.2-0.35, melody 0.3-0.4.
+  Every element should be clearly audible at its intended level."""
+
 LOFI_BRIEF_INSTRUCTIONS = f"""You are translating music requests into a compact {PRIMARY_GENRE} production brief.
 
 Rules:
@@ -125,6 +142,33 @@ COMPOSER_SIGNATURE = (
     .with_updated_fields("section_prompts", type_=list[str], desc="Ordered prompts for intro, verse, chorus, outro")
 )
 
+COMPOSE_SECTION_INSTRUCTIONS = f"""\
+You are generating one section of a {PRIMARY_GENRE} Strudel (JavaScript) live-coding composition.
+
+Return ONLY the Strudel code lines (the contents inside stack()), no markdown, no explanation.
+If `previous_code` is provided, revise it — don't start from scratch.
+
+MIX PRIORITIES:
+{MIX_PRIORITIES}
+"""
+
+
+class ComposeSectionSignature(dspy.Signature):
+    """Generate a single Strudel code section (the inner lines of a stack())."""
+
+    prompt: str = dspy.InputField(desc="What this section should sound like")
+    previous_code: str = dspy.InputField(desc="Previous code to revise, or empty string for a fresh section")
+    brief: str = dspy.InputField(desc="Structured lo-fi composition brief")
+    tempo_cpm: int = dspy.InputField(desc="Target tempo in cycles per minute")
+    forbidden: str = dspy.InputField(desc="Functions and sounds that DO NOT EXIST — never use them")
+    sounds: str = dspy.InputField(desc="Available drum samples, synths, and bass sounds")
+    api: str = dspy.InputField(desc="Core Strudel API reference")
+    effects: str = dspy.InputField(desc="Effects recipes")
+    genres: str = dspy.InputField(desc="Genre pattern templates")
+    examples: str = dspy.InputField(desc="Reference compositions for style")
+    strudel_code: str = dspy.OutputField(desc="Section code lines (contents inside stack() only)")
+
+
 FINALIZE_INSTRUCTIONS = f"""You are finishing a {PRIMARY_GENRE} composition from an incomplete draft.
 
 Return a final Strudel composition that:
@@ -145,8 +189,6 @@ class FinalizeCompositionSignature(dspy.Signature):
     query: str = dspy.InputField(desc="Original user request")
     brief: str = dspy.InputField(desc="Structured lo-fi composition brief")
     tempo_cpm: int = dspy.InputField(desc="Target tempo in cycles per minute")
-    mood_keywords: list[str] = dspy.InputField(desc="Structured mood keywords")
-    texture_keywords: list[str] = dspy.InputField(desc="Structured texture keywords")
     must_include: list[str] = dspy.InputField(desc="Concrete musical elements to keep")
     avoid: list[str] = dspy.InputField(desc="Elements or directions to avoid")
     section_prompts: list[str] = dspy.InputField(desc="Ordered prompts for intro, verse, chorus, outro")
@@ -154,13 +196,19 @@ class FinalizeCompositionSignature(dspy.Signature):
     repl_history: str = dspy.InputField(desc="Formatted REPL trajectory showing generated sections")
     shape_issues: list[str] = dspy.InputField(desc="Deterministic composition-structure issues to fix")
     validation_feedback: str = dspy.InputField(desc="Browser validation result for the draft")
-    genres: str = dspy.InputField(desc="Genre reference snippets")
-    effects: str = dspy.InputField(desc="Effects reference snippets")
-    examples: str = dspy.InputField(desc="Example compositions")
-    api: str = dspy.InputField(desc="API reference")
-    forbidden: str = dspy.InputField(desc="Forbidden functions and sounds")
+    reference_context: str = dspy.InputField(desc="Genres, effects, examples, API reference, and forbidden list")
     strudel_code: str = dspy.OutputField(desc="Final arranged Strudel composition")
     explanation: str = dspy.OutputField(desc="1-2 sentence explanation of the final composition")
+
+
+def _build_reference_context(ctx_sections: dict[str, str]) -> str:
+    """Concatenate reference sections into a single context string for the finalizer."""
+    parts = []
+    for key in ("forbidden", "sounds", "api", "effects", "genres", "examples"):
+        content = ctx_sections.get(key, "")
+        if content:
+            parts.append(f"## {key.upper()}\n{content}")
+    return "\n\n".join(parts)
 
 
 class CompositionFinalizer(dspy.Module):
@@ -175,8 +223,6 @@ class CompositionFinalizer(dspy.Module):
         query: str,
         brief: str,
         tempo_cpm: int,
-        mood_keywords: list[str],
-        texture_keywords: list[str],
         must_include: list[str],
         avoid: list[str],
         section_prompts: list[str],
@@ -184,11 +230,7 @@ class CompositionFinalizer(dspy.Module):
         repl_history: str,
         shape_issues: list[str],
         validation_feedback: str,
-        genres: str,
-        effects: str,
-        examples: str,
-        api: str,
-        forbidden: str,
+        reference_context: str,
     ):
         cleaned = sanitize_strudel(draft_code or "")
         if not composition_shape_issues(cleaned) and validation_feedback == "Valid!":
@@ -199,8 +241,6 @@ class CompositionFinalizer(dspy.Module):
                 query=query,
                 brief=brief,
                 tempo_cpm=tempo_cpm,
-                mood_keywords=mood_keywords,
-                texture_keywords=texture_keywords,
                 must_include=must_include,
                 avoid=avoid,
                 section_prompts=section_prompts,
@@ -208,17 +248,14 @@ class CompositionFinalizer(dspy.Module):
                 repl_history=repl_history,
                 shape_issues=shape_issues,
                 validation_feedback=validation_feedback,
-                genres=genres,
-                effects=effects,
-                examples=examples,
-                api=api,
-                forbidden=forbidden,
+                reference_context=reference_context,
             )
 
         return dspy.Prediction(
             strudel_code=sanitize_strudel(repaired.strudel_code),
             explanation=str(getattr(repaired, "explanation", "") or "").strip() or brief,
         )
+
 
 ORCHESTRATOR_INSTRUCTIONS = """You are a music composition orchestrator. You write Python code to compose Strudel music patterns.
 
@@ -356,7 +393,8 @@ IMPORTANT RULES:
 - Use verse-chorus repetition: [4,intro] [8,verse] [8,chorus] [8,verse] [8,chorus] [4,outro]
 - Repeating the same verse and chorus gives musical coherence — the listener hears familiar material
 - Sections should CONTRAST: intro=sparse, verse=medium, chorus=full energy, outro=wind down
-- MIX: bass gain 0.7-0.8, chords 0.4-0.6, hats 0.2-0.35. Chords lpf 700-1200 (warm, not muffled)."""
+- MIX: bass gain 0.7-0.8, chords 0.4-0.6, hats 0.2-0.35. Chords lpf 700-1200 (warm, not muffled).
+""" + f"\nMIX PRIORITIES:\n{MIX_PRIORITIES}"
 
 
 def parse_sections_from_code(code: str) -> dict[str, str]:
@@ -533,57 +571,24 @@ def run_strudel_rlm(
     # Top 2 references for compose_section (limit tokens)
     refs_text_short = format_references_for_prompt(refs[:2])
 
-    # Build compose_section tool — wraps llm_query with FORBIDDEN + sounds prepended
+    # Section composer — formal DSPy signature instead of raw LM call
+    section_predictor = dspy.Predict(ComposeSectionSignature, instructions=COMPOSE_SECTION_INSTRUCTIONS)
+
     def compose_section(prompt: str, previous_code: str = "") -> str:
-        """Generate a Strudel code section via sub-agent with forbidden list and sounds automatically included."""
-        enriched_prompt = (
-            f"You are generating Strudel (JavaScript) live-coding music.\n\n"
-            f"PRIMARY GENRE: {PRIMARY_GENRE}\n"
-            f"STRUCTURED BRIEF: {lofi_brief.brief}\n"
-            f"TARGET TEMPO: cpm({lofi_brief.tempo_cpm})\n"
-            f"MOOD KEYWORDS: {', '.join(lofi_brief.mood_keywords) or 'none'}\n"
-            f"TEXTURE KEYWORDS: {', '.join(lofi_brief.texture_keywords) or 'none'}\n"
-            f"MUST INCLUDE: {', '.join(lofi_brief.must_include) or 'none'}\n"
-            f"AVOID: {', '.join(lofi_brief.avoid) or 'none'}\n\n"
-            f"CRITICAL — these functions DO NOT EXIST, never use them:\n"
-            f"{ctx_sections['forbidden']}\n\n"
-            f"AVAILABLE SOUNDS (ONLY these work):\n"
-            f"{ctx_sections['sounds']}\n\n"
-            f"API REFERENCE:\n"
-            f"{ctx_sections['api']}\n\n"
-            f"EFFECTS RECIPES:\n"
-            f"{ctx_sections['effects']}\n\n"
-            f"GENRE PATTERNS (use as templates):\n"
-            f"{ctx_sections['genres']}\n\n"
-            f"REFERENCE COMPOSITIONS (study these for style):\n"
-            f"{refs_text_short}\n\n"
+        """Generate a Strudel code section via DSPy sub-agent."""
+        prediction = section_predictor(
+            prompt=prompt,
+            previous_code=previous_code or "",
+            brief=lofi_brief.brief,
+            tempo_cpm=lofi_brief.tempo_cpm,
+            forbidden=ctx_sections["forbidden"],
+            sounds=ctx_sections["sounds"],
+            api=ctx_sections["api"],
+            effects=ctx_sections["effects"],
+            genres=ctx_sections["genres"],
+            examples=refs_text_short,
         )
-        if previous_code:
-            enriched_prompt += (
-                f"PREVIOUS CODE (revise this, don't start from scratch):\n"
-                f"{previous_code}\n\n"
-            )
-        enriched_prompt += (
-            f"TASK: {prompt}\n\n"
-            f"MIX PRIORITIES:\n"
-            f"- MINIMAL LAYERS (4-5 per section MAX). Each layer must be essential — kick, bass,\n"
-            f"  chords, one melodic element, one percussion. Fewer voices = clearer mix = more impact.\n"
-            f"  Don't spread gain thin across 6+ layers.\n"
-            f"- MID-RANGE PRESENCE: chords/pads at lpf 700-1200 (not 400, not 2000+). The mid-range\n"
-            f"  carries the musical content — keep it warm and present, not muffled or harsh.\n"
-            f"- BASS WITH HARMONICS: prefer sawtooth lpf(300-400) over sine lpf(150) for bass —\n"
-            f"  sawtooth has overtones that translate on all speakers.\n"
-            f"- DELAY AS PRODUCTION: .delay() with .delayfeedback(0.5-0.7) creates space and depth.\n"
-            f"  This alone is more effective than piling on .room()+.delay()+.pan()+.detune() everywhere.\n"
-            f"- GAIN HIERARCHY: bass 0.7-0.8, chords 0.4-0.6, hats 0.2-0.35, melody 0.3-0.4.\n"
-            f"  Every element should be clearly audible at its intended level.\n\n"
-            f"Return ONLY the Strudel code lines (the contents inside stack()), no markdown, no explanation."
-        )
-        # Use dspy's built-in llm_query via a simple LM call
-        result = dspy.settings.lm(enriched_prompt)[0]
-        # Extract clean section code from any LLM output format
-        result = extract_section_code(result)
-        # Sanitize the output
+        result = extract_section_code(prediction.strudel_code)
         result = sanitize_strudel(result)
 
         # Section-level validation with one retry
@@ -591,9 +596,19 @@ def run_strudel_rlm(
         validation = browser.validate_code(test_code)
         if validation != "Valid!":
             logger.warning(f"[compose_section] Invalid: {validation}")
-            retry_prompt = enriched_prompt + f"\n\nERROR in your output: {validation}\nFix and return corrected code."
-            result = dspy.settings.lm(retry_prompt)[0]
-            result = extract_section_code(result)
+            prediction = section_predictor(
+                prompt=f"{prompt}\n\nERROR in previous output: {validation}\nFix and return corrected code.",
+                previous_code=result,
+                brief=lofi_brief.brief,
+                tempo_cpm=lofi_brief.tempo_cpm,
+                forbidden=ctx_sections["forbidden"],
+                sounds=ctx_sections["sounds"],
+                api=ctx_sections["api"],
+                effects=ctx_sections["effects"],
+                genres=ctx_sections["genres"],
+                examples=refs_text_short,
+            )
+            result = extract_section_code(prediction.strudel_code)
             result = sanitize_strudel(result)
 
         # Semantic check — log warnings but don't block
@@ -601,16 +616,10 @@ def run_strudel_rlm(
         if violations:
             logger.warning(f"[compose_section] Semantic violations in sub-agent output: {violations}")
 
-        # Warn if section lacks high-frequency content (all layers have lpf < 2000)
-        lpf_values = [int(m.group(1)) for m in re.finditer(r'\.lpf\((\d+)\)', result)]
-        has_hh = bool(re.search(r's\(".*?hh', result))
-        if lpf_values and max(lpf_values) < 2000 and not has_hh:
-            logger.warning(f"[compose_section] All layers filtered below 2kHz — mix may sound muffled")
-
         return result
 
     def critique_code(code: str) -> str:
-        """Analyze code for production issues. Returns code with inline // CRITIC: comments."""
+        """Analyze code for production issues. Returns code with inline // IDEA: comments."""
         from rlm_strudel.critic import critique_code_inline
         return critique_code_inline(code)
 
@@ -701,8 +710,6 @@ def run_strudel_rlm(
                 query=query,
                 brief=lofi_brief.brief,
                 tempo_cpm=lofi_brief.tempo_cpm,
-                mood_keywords=lofi_brief.mood_keywords,
-                texture_keywords=lofi_brief.texture_keywords,
                 must_include=lofi_brief.must_include,
                 avoid=lofi_brief.avoid,
                 section_prompts=lofi_brief.section_prompts,
@@ -710,11 +717,7 @@ def run_strudel_rlm(
                 repl_history=format_repl_history(getattr(rlm, "last_history", None)),
                 shape_issues=shape_issues,
                 validation_feedback=validation,
-                genres=ctx_sections["genres"],
-                effects=ctx_sections["effects"],
-                examples=ctx_sections["examples"],
-                api=ctx_sections["api"],
-                forbidden=ctx_sections["forbidden"],
+                reference_context=_build_reference_context(ctx_sections),
             )
             code = sanitize_strudel(finalized.strudel_code)
             result.strudel_code = code

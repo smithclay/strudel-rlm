@@ -78,31 +78,13 @@ REVISIONS:
 CRITICAL: Use 1-10 scale. Write "7/10" NOT "3.5/5". Cite code evidence for every score.
 """
 
-CRITIC_STRUCTURED_INSTRUCTIONS = """\
-Evaluate the composition with the same rubric, but return typed fields instead of a free-form block.
-
-Rules:
-- `harmony`, `rhythm`, `arrangement`, and `production` must be integers from 1 to 10.
-- Each `*_reason` must cite concrete evidence from the code.
-- `revisions` must be a list of concrete fixes with values and `[section]` prefixes.
-- If all scores are at least 7, return an empty `revisions` list.
-"""
-
 # ---------------------------------------------------------------------------
-# DSPy Signature
+# DSPy Signature — single critic with typed outputs and the full rubric
 # ---------------------------------------------------------------------------
 
 
 class CriticSignature(dspy.Signature):
     """Evaluate Strudel code quality on harmonic, rhythmic, structural, and production dimensions."""
-
-    query: str = dspy.InputField(desc="The original user request / music prompt")
-    strudel_code: str = dspy.InputField(desc="The Strudel code to evaluate")
-    evaluation: str = dspy.OutputField(desc="Rubric scores and revision suggestions")
-
-
-class CriticStructuredSignature(dspy.Signature):
-    """Evaluate Strudel code and return structured rubric fields."""
 
     query: str = dspy.InputField(desc="The original user request / music prompt")
     strudel_code: str = dspy.InputField(desc="The Strudel code to evaluate")
@@ -114,7 +96,7 @@ class CriticStructuredSignature(dspy.Signature):
     arrangement_reason: str = dspy.OutputField(desc="Code-cited reason for the arrangement score")
     production: int = dspy.OutputField(desc="Production score from 1 to 10")
     production_reason: str = dspy.OutputField(desc="Code-cited reason for the production score")
-    revisions: list[str] = dspy.OutputField(desc="Concrete revision fixes with [section] prefixes")
+    revisions: list[str] = dspy.OutputField(desc="Concrete revision fixes with [section] prefixes; empty list if all scores >= 7")
 
 
 # ---------------------------------------------------------------------------
@@ -438,12 +420,13 @@ class LineFinding(NamedTuple):
     message: str
 
 
-def _analyze_lines(code: str) -> tuple[list[LineFinding], list[str]]:
+def _analyze_lines(code: str) -> tuple[list[LineFinding], list[str], int]:
     """Shared detection logic for mechanical production analysis.
 
     Returns:
         line_findings: per-line issues with line index and message
         structural: whole-composition issues (not tied to a single line)
+        max_layers: layer count of the densest section (0 if none detected)
     """
     lines = code.splitlines()
     line_findings: list[LineFinding] = []
@@ -500,7 +483,7 @@ def _analyze_lines(code: str) -> tuple[list[LineFinding], list[str]]:
     if max_layers > 8:
         structural.append(f"~{max_layers} layers competing — a tight 5-7 layer mix has more punch than a crowded 10, each voice gets room to speak")
 
-    return line_findings, structural
+    return line_findings, structural, max_layers
 
 
 def critique_code_inline(code: str) -> str:
@@ -515,7 +498,7 @@ def critique_code_inline(code: str) -> str:
         cleaned = re.sub(r'\s*//\s*(?:CRITIC(?:-STRUCTURAL)?|IDEA(?:-BIG)?):.*$', '', line)
         stripped_lines.append(cleaned)
 
-    line_findings, structural = _analyze_lines("\n".join(stripped_lines))
+    line_findings, structural, _max_layers = _analyze_lines("\n".join(stripped_lines))
 
     # Build index of findings per line
     findings_by_line: dict[int, list[str]] = {}
@@ -547,7 +530,7 @@ def analyze_production(code: str) -> str:
     Returns a text block suitable for injection into the critic prompt so the
     LLM can't overlook concrete issues like muffled filters or inaudible gains.
     """
-    line_findings, structural = _analyze_lines(code)
+    line_findings, structural, max_layers = _analyze_lines(code)
 
     findings: list[str] = []
 
@@ -584,7 +567,7 @@ def analyze_production(code: str) -> str:
         elif "repetition" in s.lower():
             findings.append("NOTE: No verse-chorus repetition detected. Repeating sections improves musical coherence.")
         elif "layers" in s.lower():
-            findings.append(f"WARNING: Densest section has {s.split('~')[1].split('layers')[0].strip() if '~' in s else '8+'} layers — too many competing elements. 5-7 is the sweet spot.")
+            findings.append(f"WARNING: Densest section has {max_layers} layers — too many competing elements. 5-7 is the sweet spot.")
 
     if not findings:
         return "CODE ANALYSIS: No production issues detected."
@@ -601,11 +584,7 @@ class StrudelCritic:
     """DSPy-based critic that scores Strudel compositions."""
 
     def __init__(self) -> None:
-        self.predict_structured = dspy.Predict(
-            CriticStructuredSignature,
-            instructions=CRITIC_STRUCTURED_INSTRUCTIONS,
-        )
-        self.predict_text = dspy.Predict(CriticSignature, instructions=CRITIC_RUBRIC)
+        self.predict = dspy.Predict(CriticSignature, instructions=CRITIC_RUBRIC)
 
     def evaluate(self, query: str, strudel_code: str) -> CriticResult:
         # Mechanical pre-analysis — gives the LLM concrete facts to anchor on
@@ -616,10 +595,10 @@ class StrudelCritic:
         # Use low temperature for consistent scoring (LLM-as-judge best practice)
         with dspy.context(lm=dspy.settings.lm.copy(temperature=0.0)):
             try:
-                result = self.predict_structured(query=query, strudel_code=augmented_code)
+                result = self.predict(query=query, strudel_code=augmented_code)
                 parsed = structured_prediction_to_result(result)
                 logger.info(
-                    "[critic structured] H=%s R=%s A=%s P=%s revisions=%s",
+                    "[critic] H=%s R=%s A=%s P=%s revisions=%s",
                     parsed.harmony,
                     parsed.rhythm,
                     parsed.arrangement,
@@ -628,10 +607,14 @@ class StrudelCritic:
                 )
                 return parsed
             except Exception as exc:
-                logger.warning(f"[critic structured] Falling back to text parser: {exc}")
-                result = self.predict_text(query=query, strudel_code=augmented_code)
+                logger.warning(f"[critic] Structured extraction failed, retrying with text fallback: {exc}")
 
-        logger.info(f"[critic raw output] {result.evaluation[:500]}")
+        # Fallback: re-run with a text-only output and parse with regex
+        with dspy.context(lm=dspy.settings.lm.copy(temperature=0.0)):
+            fallback_predict = dspy.Predict("query, strudel_code -> evaluation")
+            result = fallback_predict(query=query, strudel_code=augmented_code)
+
+        logger.info(f"[critic fallback] {result.evaluation[:500]}")
         parsed = parse_critic_output(result.evaluation)
-        logger.info(f"[critic parsed] {parsed}")
+        logger.info(f"[critic fallback parsed] {parsed}")
         return parsed
